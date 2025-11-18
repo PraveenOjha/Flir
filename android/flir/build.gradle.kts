@@ -1,6 +1,7 @@
 plugins {
     id("com.android.library")
     id("kotlin-android")
+    id("maven-publish")
 }
 
 android {
@@ -76,3 +77,35 @@ tasks.register("copyFlirAars") {
 
 // Ensure AARs are available before compiling
 tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(tasks.named("copyFlirAars")) }
+
+// Maven publishing configuration for JitPack
+afterEvaluate {
+    publishing {
+        publications {
+            create<MavenPublication>("release") {
+                from(components["release"])
+                groupId = "com.github.PraveenOjha"
+                artifactId = "flir-thermal-sdk"
+                version = "1.0.0"
+
+                pom {
+                    name.set("FLIR Thermal SDK for Android")
+                    description.set("FLIR Thermal SDK React Native Android wrapper")
+                    url.set("https://github.com/PraveenOjha/Flir")
+                    licenses {
+                        license {
+                            name.set("MIT License")
+                            url.set("https://opensource.org/licenses/MIT")
+                        }
+                    }
+                    developers {
+                        developer {
+                            id.set("PraveenOjha")
+                            name.set("Praveen Ojha")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
