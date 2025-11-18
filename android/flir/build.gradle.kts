@@ -10,12 +10,15 @@ android {
 
     defaultConfig {
         minSdk = 24
-        targetSdk = 35
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
+    }
+
+    kotlinOptions {
+        jvmTarget = "21"
     }
 
     // Packaging options kept minimal
@@ -31,9 +34,20 @@ dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib")
     // Provide React Native Android APIs to compile RN bridge/view classes
     compileOnly("com.facebook.react:react-android:0.76.0")
-    // Vendored FLIR SDK AARs (copied into libs/ by copyFlirAars task)
-    implementation(files("libs/thermalsdk-release.aar"))
-    implementation(files("libs/androidsdk-release.aar"))
+    // FLIR SDK AARs - extract and repackage
+    compileOnly(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
+}
+
+// Configure Java 21 toolchain
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    }
+}
+
+// Ensure Kotlin also uses Java 21
+kotlin {
+    jvmToolchain(21)
 }
 
 // Follow FLIR sample style: rely on `compileOptions` + `org.gradle.java.home`

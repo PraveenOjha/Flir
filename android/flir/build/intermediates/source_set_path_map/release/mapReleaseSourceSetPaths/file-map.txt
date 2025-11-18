@@ -1,0 +1,7 @@
+flir.android.flir-pngs-0 /home/praveen/Desktop/Flir/android/flir/build/generated/res/pngs/release
+flir.android.flir-resValues-1 /home/praveen/Desktop/Flir/android/flir/build/generated/res/resValues/release
+flir.android.flir-mergeReleaseResources-2 /home/praveen/Desktop/Flir/android/flir/build/intermediates/incremental/release/mergeReleaseResources/merged.dir
+flir.android.flir-mergeReleaseResources-3 /home/praveen/Desktop/Flir/android/flir/build/intermediates/incremental/release/mergeReleaseResources/stripped.dir
+flir.android.flir-release-4 /home/praveen/Desktop/Flir/android/flir/build/intermediates/merged_res/release/mergeReleaseResources
+flir.android.flir-main-5 /home/praveen/Desktop/Flir/android/flir/src/main/res
+flir.android.flir-release-6 /home/praveen/Desktop/Flir/android/flir/src/release/res
