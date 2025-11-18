@@ -1,0 +1,6 @@
+framework module ThermalSDK {
+  umbrella header "ThermalSDK.h"
+  export *
+
+  module * { export * }
+}
