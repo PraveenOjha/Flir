@@ -9,10 +9,11 @@ Pod::Spec.new do |s|
   s.source       = { :git => 'https://github.com/PraveenOjha/Flir.git', :tag => s.version.to_s }
   s.platform     = :ios, '13.0'
 
-  # Source files for the RN native module
+  # Podspec location: ios/flir/Flir.podspec
+  # Source files relative to podspec location
   s.source_files = 'Flir/*.{h,m,mm}'
 
-  # Vendored FLIR framework (checked into repo under flir/lib/ios)
+  # Vendored FLIR framework relative to podspec location
   s.vendored_frameworks = 'ThermalSDK.framework'
 
   # Do not enforce a React dependency here; the app's Podfile should already include React

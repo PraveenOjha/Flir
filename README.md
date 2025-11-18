@@ -48,13 +48,11 @@ dependencies {
 1. Add the following to your `Podfile`:
 
 ```ruby
+# From GitHub repository (recommended)
 pod 'Flir', :git => 'https://github.com/PraveenOjha/Flir.git', :tag => '1.0.0'
-```
 
-Or for local development:
-
-```ruby
-pod 'Flir', :path => '../node_modules/flir-thermal-sdk/ios/flir'
+# OR for local development (adjust path to point to ios/flir/)
+pod 'Flir', :podspec => '../path/to/Flir/ios/flir/Flir.podspec'
 ```
 
 2. Run:
@@ -63,6 +61,8 @@ pod 'Flir', :path => '../node_modules/flir-thermal-sdk/ios/flir'
 cd ios
 pod install
 ```
+
+**Note:** The podspec file is located at `ios/flir/Flir.podspec` in the repository.
 
 ## Usage
 
@@ -163,21 +163,22 @@ To publish to CocoaPods Trunk:
 pod trunk register your-email@example.com 'Your Name'
 ```
 
-2. Validate your podspec:
+2. Validate your podspec (run from repository root):
 ```bash
-cd ios/flir
-pod spec lint Flir.podspec
+pod spec lint ios/flir/Flir.podspec --allow-warnings
 ```
 
-3. Push to CocoaPods:
+3. Push to CocoaPods (run from repository root):
 ```bash
-pod trunk push Flir.podspec
+pod trunk push ios/flir/Flir.podspec --allow-warnings
 ```
 
 4. Verify publication:
 ```bash
 pod search Flir
 ```
+
+**Note:** The `--allow-warnings` flag may be needed for vendored frameworks.
 
 ## Development
 
