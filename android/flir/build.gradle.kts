@@ -6,11 +6,11 @@ plugins {
 
 android {
     namespace = "flir.android"
-    compileSdk = property("compileSdkVersion").toString().toInt()
+    compileSdk = 35
 
     defaultConfig {
-        minSdk = property("minSdkVersion").toString().toInt()
-        targetSdk = property("targetSdkVersion").toString().toInt()
+        minSdk = 24
+        targetSdk = 35
     }
 
     compileOptions {
@@ -30,30 +30,10 @@ android {
 dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib")
     // Provide React Native Android APIs to compile RN bridge/view classes
-    implementation("com.facebook.react:react-android")
+    compileOnly("com.facebook.react:react-android:0.76.0")
     // Vendored FLIR SDK AARs (copied into libs/ by copyFlirAars task)
     implementation(files("libs/thermalsdk-release.aar"))
     implementation(files("libs/androidsdk-release.aar"))
-}
-
-// Ensure Kotlin and Java compile tasks target JVM 21 using Gradle toolchains.
-tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile::class.java).configureEach {
-    kotlinOptions {
-        jvmTarget = "21"
-    }
-}
-
-// Configure Gradle Java toolchain for Java compilation (use Java 21 compiler).
-val javaLanguageVersion = JavaLanguageVersion.of(21)
-tasks.withType(JavaCompile::class.java).configureEach {
-    javaCompiler.set(javaToolchains.compilerFor {
-        languageVersion.set(javaLanguageVersion)
-    })
-}
-
-// Also configure Kotlin JVM toolchain to ensure the Kotlin compiler uses Java 21 runtime.
-kotlin {
-    jvmToolchain(21)
 }
 
 // Follow FLIR sample style: rely on `compileOptions` + `org.gradle.java.home`

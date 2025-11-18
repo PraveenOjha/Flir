@@ -1,0 +1,16 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /home/praveen/Desktop/Flir/android/flir/build/intermediates/tmp/ProcessLibraryManifest/release/tempAndroidManifest14206331330004261392.xml:2:13-83
+INJECTED from /home/praveen/Desktop/Flir/android/flir/build/intermediates/tmp/ProcessLibraryManifest/release/tempAndroidManifest14206331330004261392.xml:2:13-83
+	package
+		INJECTED from /home/praveen/Desktop/Flir/android/flir/build/intermediates/tmp/ProcessLibraryManifest/release/tempAndroidManifest14206331330004261392.xml
+	xmlns:android
+		ADDED from /home/praveen/Desktop/Flir/android/flir/build/intermediates/tmp/ProcessLibraryManifest/release/tempAndroidManifest14206331330004261392.xml:2:23-81
+uses-sdk
+INJECTED from /home/praveen/Desktop/Flir/android/flir/build/intermediates/tmp/ProcessLibraryManifest/release/tempAndroidManifest14206331330004261392.xml reason: use-sdk injection requested
+INJECTED from /home/praveen/Desktop/Flir/android/flir/build/intermediates/tmp/ProcessLibraryManifest/release/tempAndroidManifest14206331330004261392.xml
+INJECTED from /home/praveen/Desktop/Flir/android/flir/build/intermediates/tmp/ProcessLibraryManifest/release/tempAndroidManifest14206331330004261392.xml
+	android:targetSdkVersion
+		INJECTED from /home/praveen/Desktop/Flir/android/flir/build/intermediates/tmp/ProcessLibraryManifest/release/tempAndroidManifest14206331330004261392.xml
+	android:minSdkVersion
+		INJECTED from /home/praveen/Desktop/Flir/android/flir/build/intermediates/tmp/ProcessLibraryManifest/release/tempAndroidManifest14206331330004261392.xml
