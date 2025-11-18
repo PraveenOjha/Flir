@@ -20,6 +20,37 @@ object FlirManager {
     private val minEmitIntervalMs = 333L // ~3 fps
     private var discoveryStarted = false
     private var reactContext: ThemedReactContext? = null
+    
+    // GL texture callback support for native filters
+    interface TextureUpdateCallback {
+        fun onTextureUpdate(bitmap: Bitmap, textureUnit: Int)
+    }
+    
+    interface TemperatureCallback {
+        fun onTemperatureData(temperature: Double, x: Int, y: Int)
+    }
+    
+    private var textureCallback: TextureUpdateCallback? = null
+    private var temperatureCallback: TemperatureCallback? = null
+    private var latestBitmap: Bitmap? = null
+    
+    fun setTextureCallback(callback: TextureUpdateCallback?) {
+        textureCallback = callback
+    }
+    
+    fun setTemperatureCallback(callback: TemperatureCallback?) {
+        temperatureCallback = callback
+    }
+    
+    fun getLatestBitmap(): Bitmap? = latestBitmap
+    
+    fun getTemperatureAtPoint(x: Int, y: Int): Double? {
+        return try {
+            cameraHandler.getTemperatureAt(x, y)
+        } catch (t: Throwable) {
+            null
+        }
+    }
 
     fun init(context: Context) {
         try {
@@ -104,6 +135,18 @@ object FlirManager {
         lastEmitMs.set(now)
 
         val bmp = msxBitmap ?: dcBitmap ?: return
+        latestBitmap = bmp
+        
+        // Invoke texture callback for native GL/Metal filters (texture unit 7)
+        textureCallback?.onTextureUpdate(bmp, 7)
+        
+        // Get and emit temperature data
+        try {
+            val temp = cameraHandler.getTemperatureAt(80, 60) // center point
+            if (temp != null) {
+                temperatureCallback?.onTemperatureData(temp, 80, 60)
+            }
+        } catch (ignored: Throwable) {}
 
         try {
             val cacheDir = ctx.cacheDir
