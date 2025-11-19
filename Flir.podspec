@@ -10,14 +10,21 @@ Pod::Spec.new do |s|
   s.platform     = :ios, '13.0'
 
   # Paths relative to repository root where podspec is located
-  s.source_files = 'ios/flir/Flir/**/*.{h,m,mm}'
-  s.public_header_files = 'ios/flir/Flir/**/*.h'
+  s.source_files = 'ios/Flir/src/**/*.{h,m,mm}'
+  s.public_header_files = 'ios/Flir/src/**/*.h'
 
-  # Vendored FLIR framework
-  s.vendored_frameworks = 'ios/flir/ThermalSDK.framework'
+  # Vendored FLIR framework and other binary libs (placed in ios/Flir/libs)
+  # When publishing, place ThermalSDK.framework and any supporting frameworks
+  # or .dylib packages under `ios/Flir/libs/` in this repo.
+  # Vendored frameworks are expected under ios/Flir/libs to match the new folder naming
+  s.vendored_frameworks = 'ios/Flir/libs/*.framework'
+  s.vendored_libraries = 'ios/Flir/libs/*.dylib'
 
-  # Framework search paths
-  s.frameworks = 'Foundation', 'UIKit'
+  # System frameworks to link against
+  s.frameworks = 'ExternalAccessory', 'Foundation', 'UIKit'
+
+  # Keep vendored libs path so CocoaPods includes them in the pod archive
+  s.preserve_paths = 'ios/Flir/libs/*'
   
   # React Native dependency
   s.dependency 'React-Core'

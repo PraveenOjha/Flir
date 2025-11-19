@@ -1,0 +1,6 @@
+framework module MeterLink {
+  umbrella header "MeterLink.h"
+  export *
+
+  module * { export * }
+}

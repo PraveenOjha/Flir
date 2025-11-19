@@ -1,5 +1,11 @@
 jdk:
   - openjdk21
 install:
-  - ./gradlew :flir:publishToMavenLocal
+   - ./gradlew :Flir:publishToMavenLocal
+before_install:
+  - sdk install java 21.0.1-open
+  - sdk use java 21.0.1-open
+script:
+  # Publish Android module from Gradle using the module path 'Flir' (case matches android/Flir)
+  - ./gradlew :Flir:publishToMavenLocal
 
