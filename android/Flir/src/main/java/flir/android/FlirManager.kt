@@ -21,6 +21,16 @@ object FlirManager {
     private var discoveryStarted = false
     private var reactContext: ThemedReactContext? = null
     
+    // Emulator and device state tracking
+    private var isEmulatorMode = false
+    private var isPhysicalDeviceConnected = false
+    private var connectedIdentity: com.flir.thermalsdk.live.Identity? = null
+    
+    // Emulator and device state tracking
+    private var isEmulatorMode = false
+    private var isPhysicalDeviceConnected = false
+    private var connectedIdentity: com.flir.thermalsdk.live.Identity? = null
+    
     // GL texture callback support for native filters
     interface TextureUpdateCallback {
         fun onTextureUpdate(bitmap: Bitmap, textureUnit: Int)
@@ -51,6 +61,27 @@ object FlirManager {
             null
         }
     }
+    
+    /**
+     * Check if currently running in emulator mode (no physical FLIR device)
+     */
+    fun isEmulator(): Boolean = isEmulatorMode
+    
+    /**
+     * Check if a physical FLIR device is connected
+     */
+    fun isDeviceConnected(): Boolean = isPhysicalDeviceConnected
+    
+    /**
+     * Get information about the connected device
+     */
+    fun getConnectedDeviceInfo(): String {
+        return when {
+            connectedIdentity == null -> "Not connected"
+            isEmulatorMode -> "Emulator (${connectedIdentity?.deviceId})"
+            else -> "Physical device (${connectedIdentity?.deviceId})"
+        }
+    }
 
     fun init(context: Context) {
         try {
@@ -71,16 +102,30 @@ object FlirManager {
         cameraHandler.startDiscovery(object : com.flir.thermalsdk.live.discovery.DiscoveryEventListener {
             override fun onCameraFound(discoveredCamera: com.flir.thermalsdk.live.discovery.DiscoveredCamera) {
                 cameraHandler.add(discoveredCamera.identity)
-                val identity = cameraHandler.getFlirOne()
-                val toConnect = identity ?: cameraHandler.getFlirOneEmulator() ?: cameraHandler.getCppEmulator()
+                
+                // Prioritize real device over emulator
+                val realDevice = cameraHandler.getFlirOne()
+                val emulatorDevice = cameraHandler.getFlirOneEmulator() ?: cameraHandler.getCppEmulator()
+                val toConnect = realDevice ?: emulatorDevice
+                
                 if (toConnect != null) {
+                    // Determine if we're connecting to emulator
+                    isEmulatorMode = (realDevice == null)
+                    isPhysicalDeviceConnected = (realDevice != null)
+                    connectedIdentity = toConnect
+                    
                     Thread {
                         try {
                             cameraHandler.connect(toConnect, com.flir.thermalsdk.live.connectivity.ConnectionStatusListener { errorCode ->
                                 emitDeviceState("disconnected", false)
+                                isPhysicalDeviceConnected = false
+                                connectedIdentity = null
                             })
-                            emitDeviceState("connected", true)
+                            
+                            val deviceType = if (isEmulatorMode) "emulator" else "device"
+                            emitDeviceState("connected", true, mapOf("deviceType" to deviceType, "isEmulator" to isEmulatorMode))
                             FlirStatus.flirConnected = true
+                            
                             cameraHandler.startStream(object : CameraHandler.StreamDataListener {
                                 override fun images(dataHolder: FrameDataHolder) {
                                     handleIncomingFrames(dataHolder.msxBitmap, dataHolder.dcBitmap, context)
@@ -93,6 +138,8 @@ object FlirManager {
                         } catch (e: Exception) {
                             emitDeviceState("disconnected", false)
                             FlirStatus.flirConnected = false
+                            isPhysicalDeviceConnected = false
+                            connectedIdentity = null
                         }
                     }.start()
                 }
@@ -126,6 +173,27 @@ object FlirManager {
             cameraHandler.getTemperatureAt(x, y)
         } catch (t: Throwable) {
             null
+        }
+    }
+    
+    /**
+     * Check if currently running in emulator mode (no physical FLIR device)
+     */
+    fun isEmulator(): Boolean = isEmulatorMode
+    
+    /**
+     * Check if a physical FLIR device is connected
+     */
+    fun isDeviceConnected(): Boolean = isPhysicalDeviceConnected
+    
+    /**
+     * Get information about the connected device
+     */
+    fun getConnectedDeviceInfo(): String {
+        return when {
+            connectedIdentity == null -> "Not connected"
+            isEmulatorMode -> "Emulator (${connectedIdentity?.deviceId})"
+            else -> "Physical device (${connectedIdentity?.deviceId})"
         }
     }
 
@@ -180,13 +248,23 @@ object FlirManager {
         }
     }
 
-    private fun emitDeviceState(state: String, connected: Boolean) {
+    private fun emitDeviceState(state: String, connected: Boolean, extras: Map<String, Any> = emptyMap()) {
         FlirStatus.flirConnected = connected
         val ctx = reactContext ?: return
         val params: WritableMap = Arguments.createMap().apply {
             putString("state", state)
             putBoolean("connected", connected)
             putString("message", if (connected) "FLIR device connected" else state)
+            
+            // Add any extra parameters
+            extras.forEach { (key, value) ->
+                when (value) {
+                    is String -> putString(key, value)
+                    is Boolean -> putBoolean(key, value)
+                    is Int -> putInt(key, value)
+                    is Double -> putDouble(key, value)
+                }
+            }
         }
         try {
             ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)

@@ -51,8 +51,8 @@ dependencies {
 # From GitHub repository (recommended)
 pod 'Flir', :git => 'https://github.com/PraveenOjha/Flir.git', :tag => '1.0.0'
 
-# OR for local development (adjust path to point to `ios/Flir/`)
-pod 'Flir', :podspec => '../path/to/Flir/Flir.podspec'
+# OR for local development (adjust path to point to ios/flir/)
+pod 'Flir', :podspec => '../path/to/Flir/ios/flir/Flir.podspec'
 ```
 
 2. Run:
@@ -62,22 +62,7 @@ cd ios
 pod install
 ```
 
-**Note:** The podspec file is in the repository root (`Flir.podspec`) — it references native files under `ios/Flir/`.
-
-### Native iOS libraries and frameworks
-
-This project expects binary frameworks required by FLIR (ThermalSDK plus supporting libs) to be placed under `ios/Flir/libs/`.
-
-1. Add frameworks to `ios/Flir/libs/` (ThermalSDK.framework and any other bundled frameworks such as libavcodec*, libavformat*, libavutil*, etc.).
-2. Run the helper script to copy ThermalSDK from `ios/Flir/` into `ios/Flir/libs/` if you want to keep a copy there:
-
-```bash
-./scripts/copy_ios_libs.sh
-```
-
-3. Then run `pod install` in your iOS project directory.
-
-The podspec (`Flir.podspec` in repo root) references `ios/Flir/libs/*` as vendored frameworks; the CocoaPods archive will include any `.framework` or `.dylib` from that directory.
+**Note:** The podspec file is located at `ios/flir/Flir.podspec` in the repository.
 
 ## Usage
 
@@ -180,12 +165,12 @@ pod trunk register your-email@example.com 'Your Name'
 
 2. Validate your podspec (run from repository root):
 ```bash
-pod spec lint Flir.podspec --allow-warnings
+pod spec lint ios/flir/Flir.podspec --allow-warnings
 ```
 
 3. Push to CocoaPods (run from repository root):
 ```bash
-pod trunk push Flir.podspec --allow-warnings
+pod trunk push ios/flir/Flir.podspec --allow-warnings
 ```
 
 4. Verify publication:
@@ -209,7 +194,7 @@ cd android
 #### iOS
 
 ```bash
-cd ios/Flir
+cd ios/flir
 pod install
 xcodebuild -workspace Flir.xcworkspace -scheme Flir -configuration Release
 ```

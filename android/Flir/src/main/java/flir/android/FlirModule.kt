@@ -44,4 +44,31 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             promise.reject("ERR_FLIR_SAMPLE", e)
         }
     }
+    
+    @ReactMethod
+    fun isEmulator(promise: Promise) {
+        try {
+            promise.resolve(FlirManager.isEmulator())
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_EMULATOR_CHECK", e)
+        }
+    }
+    
+    @ReactMethod
+    fun isDeviceConnected(promise: Promise) {
+        try {
+            promise.resolve(FlirManager.isDeviceConnected())
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_DEVICE_CHECK", e)
+        }
+    }
+    
+    @ReactMethod
+    fun getConnectedDeviceInfo(promise: Promise) {
+        try {
+            promise.resolve(FlirManager.getConnectedDeviceInfo())
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_DEVICE_INFO", e)
+        }
+    }
 }
