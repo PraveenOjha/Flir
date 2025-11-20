@@ -290,6 +290,10 @@ This React Native wrapper is provided under the MIT license, but the FLIR therma
 
 By using this wrapper, you agree to comply with FLIR's licensing terms and conditions. License - see LICENSE file for details
 
+### Disclaimer
+
+Flir SDKs may not be used to create apps intended for medical or health purposes; please refer to the SDK license agreement for more detailed information.
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.

@@ -1,7 +1,233 @@
-#import \"FlirModule.h\"\n#import \"FlirEventEmitter.h\"\n#import \"FlirState.h\"\n#import <React/RCTLog.h>\n#import <ThermalSDK/ThermalSDK.h>\n\n@interface FlirModule() <FLIRDiscoveryEventDelegate>\n@property (nonatomic, strong) FLIRDiscovery *discovery;\n@property (nonatomic, strong) FLIRCamera *camera;\n@property (nonatomic, strong) FLIRIdentity *connectedIdentity;\n@property (nonatomic, assign) BOOL isEmulatorMode;\n@property (nonatomic, assign) BOOL isPhysicalDeviceConnected;\n@end
+#import "FlirModule.h"
+#import "FlirEventEmitter.h"
+#import "FlirState.h"
 #import <ThermalSDK/ThermalSDK.h>
+#import <React/RCTLog.h>
+
+#ifndef F1_gen3
+#define F1_gen3 FLIRCameraType_flirOne
+#endif
+
+
+@interface FlirModule() <FLIRDiscoveryEventDelegate>
+@property (nonatomic, strong) FLIRDiscovery *discovery;
+@property (nonatomic, strong) FLIRCamera *camera;
+@property (nonatomic, strong) FLIRIdentity *connectedIdentity;
+@property (nonatomic, assign) BOOL isEmulatorMode;
+@property (nonatomic, assign) BOOL isPhysicalDeviceConnected;
+@end
+
+@implementation FlirModule
+
+RCT_EXPORT_MODULE(FlirIOS);
+
+RCT_EXPORT_METHOD(startDiscovery)
+{
+  // Hook into ThermalSDK discovery when ready. For now, emit an event to JS.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [[FlirEventEmitter shared] sendDeviceEvent:@"FlirDeviceConnected" body:@{ @"msg": @"discovery-started" }];
+    RCTLogInfo(@"FLIR discovery started (placeholder)");
+  });
+}
+
+RCT_EXPORT_METHOD(stopDiscovery)
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [[FlirEventEmitter shared] sendDeviceEvent:@"FlirDeviceDisconnected" body:@{ @"msg": @"discovery-stopped" }];
+    RCTLogInfo(@"FLIR discovery stopped (placeholder)");
+  });
+}
+
+RCT_EXPORT_METHOD(connect:(NSDictionary *)identity resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
+{
+  // TODO: implement real connect using ThermalSDK and identity info
+  dispatch_async(dispatch_get_main_queue(), ^{
+    RCTLogInfo(@"Flir connect called (placeholder)");
+    [[FlirEventEmitter shared] sendDeviceEvent:@"FlirDeviceConnected" body:@{ @"identity": identity ?: @{} }];
+    resolve(@(YES));
+  });
+}
+
+RCT_EXPORT_METHOD(disconnect)
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    RCTLogInfo(@"Flir disconnect called (placeholder)");
+    [[FlirEventEmitter shared] sendDeviceEvent:@"FlirDeviceDisconnected" body:@{}];
+  });
+}
+
+RCT_EXPORT_METHOD(getTemperatureAt:(nonnull NSNumber *)x y:(nonnull NSNumber *)y resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+  // Return the last sampled temperature from the preview/state singleton
+  dispatch_async(dispatch_get_main_queue(), ^{
+    double t = [FlirState shared].lastTemperature;
+    if (isnan(t)) {
+      resolve([NSNull null]);
+    } else {
+      resolve(@(t));
+    }
+  });
+}
+
+RCT_EXPORT_METHOD(isEmulator:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    resolve(@(self.isEmulatorMode));
+  });
+}
+
+RCT_EXPORT_METHOD(isDeviceConnected:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    resolve(@(self.isPhysicalDeviceConnected));
+  });
+}
+
+RCT_EXPORT_METHOD(getConnectedDeviceInfo:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (self.connectedIdentity == nil) {
+      resolve(@"Not connected");
+    } else if (self.isEmulatorMode) {
+      resolve([NSString stringWithFormat:@"Emulator (%@)", [self.connectedIdentity deviceId]]);
+    } else {
+      resolve([NSString stringWithFormat:@"Physical device (%@)", [self.connectedIdentity deviceId]]);
+    }
+  });
+}
+
+RCT_EXPORT_METHOD(startEmulatorMode:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self initializeEmulatorMode];
+    resolve(@(YES));
+  });
+}
+
+- (void)initializeEmulatorMode
+{
+  if (!self.discovery) {
+    self.discovery = [[FLIRDiscovery alloc] init];
+    self.discovery.delegate = self;
+  }
+
+  // Create emulator identity for testing; use FLIRCameraType for compatibility
+  FLIRIdentity *emulatorIdentity = [[FLIRIdentity alloc] initWithEmulatorType:FLIRCameraType_flirOne];
+  if (emulatorIdentity) {
+    self.connectedIdentity = emulatorIdentity;
+    self.isEmulatorMode = YES;
+    self.isPhysicalDeviceConnected = NO;
+
+    // Start discovery for emulator
+    [self.discovery start:FLIRCommunicationInterfaceEmulator cameraType:FLIRCameraType_flirOne];
+
+    // Emit connection event
+    [[FlirEventEmitter shared] sendDeviceEvent:@"FlirDeviceConnected" body:@{
+      @"identity": @{
+        @"deviceId": [emulatorIdentity deviceId] ?: @"Emulator",
+        @"isEmulator": @(YES)
+      },
+      @"deviceType": @"emulator",
+      @"isEmulator": @(YES)
+    }];
+  }
+}
+
+#pragma mark - FLIRDiscoveryEventDelegate
+
+- (void)cameraDiscovered:(FLIRDiscoveredCamera *)discoveredCamera {
+  FLIRIdentity *identity = discoveredCamera.identity;
+
+  BOOL isRealDevice = ([identity communicationInterface] != FLIRCommunicationInterfaceEmulator);
+
+  if (isRealDevice && !self.isPhysicalDeviceConnected) {
+    self.connectedIdentity = identity;
+    self.isEmulatorMode = NO;
+    self.isPhysicalDeviceConnected = YES;
+    [self connectToDevice:identity];
+  } else if (!isRealDevice && !self.isPhysicalDeviceConnected) {
+    self.connectedIdentity = identity;
+    self.isEmulatorMode = YES;
+    self.isPhysicalDeviceConnected = NO;
+    [self connectToDevice:identity];
+  }
+}
+
+#pragma mark - Helper Methods
+
+- (void)connectToDevice:(FLIRIdentity *)identity {
+  if (!self.camera) {
+    self.camera = [[FLIRCamera alloc] init];
+  }
+
+  NSError *error;
+  BOOL connected = [self.camera connect:identity error:&error];
+
+  if (connected) {
+    NSString *deviceType = self.isEmulatorMode ? @"emulator" : @"device";
+    [[FlirEventEmitter shared] sendDeviceEvent:@"FlirDeviceConnected" body:@{
+      @"identity": @{
+        @"deviceId": [identity deviceId] ?: @"Unknown",
+        @"isEmulator": @(self.isEmulatorMode)
+      },
+      @"deviceType": deviceType,
+      @"isEmulator": @(self.isEmulatorMode)
+    }];
+  } else {
+    RCTLogError(@"Failed to connect to FLIR device: %@", error.localizedDescription);
+  }
+}
+
+#pragma mark - FLIRDiscoveryEventDelegate
+
+- (void)cameraFound:(FLIRIdentity *)identity
+{
+  self.connectedIdentity = identity;
+  self.isEmulatorMode = ([identity communicationInterface] == FLIRCommunicationInterfaceEmulator);
+  self.isPhysicalDeviceConnected = !self.isEmulatorMode;
+
+  [[FlirEventEmitter shared] sendDeviceEvent:@"FlirDeviceConnected" body:@{
+    @"identity": @{
+      @"deviceId": [identity deviceId] ?: @"Unknown",
+      @"isEmulator": @(self.isEmulatorMode)
+    },
+    @"deviceType": self.isEmulatorMode ? @"emulator" : @"physical",
+    @"isEmulator": @(self.isEmulatorMode)
+  }];
+}
+
+- (void)cameraLost:(FLIRIdentity *)identity
+{
+  self.connectedIdentity = nil;
+  self.isEmulatorMode = NO;
+  self.isPhysicalDeviceConnected = NO;
+
+  [[FlirEventEmitter shared] sendDeviceEvent:@"FlirDeviceDisconnected" body:@{
+    @"identity": @{
+      @"deviceId": [identity deviceId] ?: @"Unknown",
+      @"isEmulator": @([identity communicationInterface] == FLIRCommunicationInterfaceEmulator)
+    },
+    @"wasEmulator": @([identity communicationInterface] == FLIRCommunicationInterfaceEmulator)
+  }];
+}
+
+- (void)discoveryError:(NSString *)error netServiceError:(int)nsnetserviceserror on:(FLIRCommunicationInterface)iface
+{
+  [[FlirEventEmitter shared] sendDeviceEvent:@"FlirError" body:@{
+    @"error": error ?: @"Unknown discovery error",
+    @"type": @"discovery",
+    @"interface": @(iface)
+  }];
+}
+
+@end
+#import "FlirModule.h"
+#import "FlirEventEmitter.h"
+#import "FlirState.h"
+#import <ThermalSDK/ThermalSDK.h>
+#ifndef F1_gen3
+#define F1_gen3 FLIRCameraType_flirOne
+#endif
+#import <React/RCTLog.h>
+
 
 @interface FlirModule()
+<FLIRDiscoveryEventDelegate>
 @property (nonatomic, strong) FLIRDiscovery *discovery;
 @property (nonatomic, strong) FLIRCamera *camera;
 @property (nonatomic, strong) FLIRIdentity *connectedIdentity;
