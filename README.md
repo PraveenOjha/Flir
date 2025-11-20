@@ -205,6 +205,58 @@ xcodebuild -workspace Flir.xcworkspace -scheme Flir -configuration Release
 npm test
 ```
 
+## Emulator Mode
+
+This wrapper supports emulator mode for development and testing without requiring a physical FLIR device.
+
+### Features
+
+- **Device Detection**: Automatically detect if running on an emulator
+- **Fallback Mode**: Use FLIR's built-in emulator when no physical device is available
+- **Consistent API**: Same API calls work for both emulator and physical devices
+
+### Usage
+
+```javascript
+import FlirModule from 'react-native-flir';
+
+// Check if running in emulator mode
+const isEmulator = await FlirModule.isEmulator();
+console.log('Running in emulator:', isEmulator);
+
+// Check if a physical device is connected
+const isDeviceConnected = await FlirModule.isDeviceConnected();
+console.log('Physical device connected:', isDeviceConnected);
+
+// Get device information
+const deviceInfo = await FlirModule.getConnectedDeviceInfo();
+console.log('Device info:', deviceInfo);
+
+// Force start emulator mode (useful for testing)
+await FlirModule.startEmulatorMode();
+```
+
+### Emulator Features
+
+- **Simulated Thermal Data**: Provides mock thermal imaging data
+- **Temperature Readings**: Returns simulated temperature values
+- **Device Events**: Emits connection/disconnection events like physical devices
+- **Testing Environment**: Perfect for CI/CD and development without hardware
+
+### Android Emulator Detection
+
+The Android implementation detects emulators by checking:
+- Build properties (`ro.build.fingerprint`, `ro.kernel.qemu`)
+- Hardware characteristics
+- Build model and manufacturer
+
+### iOS Simulator Detection
+
+The iOS implementation uses:
+- FLIR SDK's built-in emulator interface
+- Runtime environment detection
+- Simulator-specific device identifiers
+
 ## Requirements
 
 ### Android
@@ -218,9 +270,25 @@ npm test
 - Xcode 14+
 - CocoaPods 1.10+
 
+## FLIR SDK Licensing
+
+This React Native wrapper is provided under the MIT license, but the FLIR thermal imaging SDKs have their own licensing requirements:
+
+1. **Commercial Use**: Requires a commercial license from FLIR
+2. **Development License**: Required even for development and testing
+3. **Distribution**: You cannot distribute FLIR SDK libraries without proper licensing
+
+**Important**: The FLIR SDK libraries included in this repository are placeholders. You must:
+- Register at [FLIR Developer Portal](https://www.flir.com/developer/mobile-sdk/)
+- Download your licensed SDK versions
+- Replace the placeholder files with your licensed libraries
+
 ## License
 
-MIT License - see LICENSE file for details
+**Wrapper Code**: MIT License (this React Native wrapper)
+**FLIR SDK**: Proprietary license from FLIR Systems (see FLIR developer portal)
+
+By using this wrapper, you agree to comply with FLIR's licensing terms and conditions. License - see LICENSE file for details
 
 ## Contributing
 

@@ -26,11 +26,6 @@ object FlirManager {
     private var isPhysicalDeviceConnected = false
     private var connectedIdentity: com.flir.thermalsdk.live.Identity? = null
     
-    // Emulator and device state tracking
-    private var isEmulatorMode = false
-    private var isPhysicalDeviceConnected = false
-    private var connectedIdentity: com.flir.thermalsdk.live.Identity? = null
-    
     // GL texture callback support for native filters
     interface TextureUpdateCallback {
         fun onTextureUpdate(bitmap: Bitmap, textureUnit: Int)
@@ -173,27 +168,6 @@ object FlirManager {
             cameraHandler.getTemperatureAt(x, y)
         } catch (t: Throwable) {
             null
-        }
-    }
-    
-    /**
-     * Check if currently running in emulator mode (no physical FLIR device)
-     */
-    fun isEmulator(): Boolean = isEmulatorMode
-    
-    /**
-     * Check if a physical FLIR device is connected
-     */
-    fun isDeviceConnected(): Boolean = isPhysicalDeviceConnected
-    
-    /**
-     * Get information about the connected device
-     */
-    fun getConnectedDeviceInfo(): String {
-        return when {
-            connectedIdentity == null -> "Not connected"
-            isEmulatorMode -> "Emulator (${connectedIdentity?.deviceId})"
-            else -> "Physical device (${connectedIdentity?.deviceId})"
         }
     }
 

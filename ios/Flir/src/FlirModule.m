@@ -78,19 +78,7 @@ RCT_EXPORT_METHOD(getTemperatureAt:(nonnull NSNumber *)x y:(nonnull NSNumber *)y
   }
 }
 
-- (void)cameraLost:(FLIRIdentity *)cameraIdentity {
-  if ([cameraIdentity.deviceId isEqualToString:self.connectedIdentity.deviceId]) {
-    self.connectedIdentity = nil;
-    self.isEmulatorMode = NO;
-    self.isPhysicalDeviceConnected = NO;
-    
-    [[FlirEventEmitter shared] sendDeviceEvent:@"FlirDeviceDisconnected" body:@{}];
-  }
-}
-
-- (void)discoveryError:(NSString *)error netServiceError:(int)nsnetserviceserror on:(FLIRCommunicationInterface)iface {
-  RCTLogError(@"FLIR Discovery error: %@", error);
-}
+#pragma mark - Helper Methods
 
 - (void)connectToDevice:(FLIRIdentity *)identity {
   if (!self.camera) {
@@ -154,12 +142,13 @@ RCT_EXPORT_METHOD(getTemperatureAt:(nonnull NSNumber *)x y:(nonnull NSNumber *)y
   }];
 }
 
-- (void)discoveryError:(NSString *)error
+- (void)discoveryError:(NSString *)error netServiceError:(int)nsnetserviceserror on:(FLIRCommunicationInterface)iface
 {
   // Emit error event
   [[FlirEventEmitter shared] sendDeviceEvent:@"FlirError" body:@{
     @"error": error ?: @"Unknown discovery error",
-    @"type": @"discovery"
+    @"type": @"discovery",
+    @"interface": @(iface)
   }];
 }
 
