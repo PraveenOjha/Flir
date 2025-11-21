@@ -154,6 +154,23 @@ git push origin 1.0.0
 
 4. Check build status at: `https://jitpack.io/#PraveenOjha/Flir`
 
+### Notes for CI / JitPack
+
+If the Android build succeeds locally but fails on JitPack/CI with an error like:
+
+```
+Error: Unable to access jarfile /home/jitpack/build/gradle/wrapper/gradle-wrapper.jar
+```
+
+this typically means the Gradle wrapper files are missing from the published repository. JitPack runs builds in a clean VM and expects the wrapper files to be present in the repo. To make the build reproducible on JitPack, ensure you commit the following files:
+
+- `gradle/wrapper/gradle-wrapper.jar`
+- `gradle/wrapper/gradle-wrapper.properties`
+- `gradlew` (ensure executable bit is set)
+- `gradlew.bat`
+
+After committing those files, trigger a new JitPack build (or push a new tag). Avoid committing `local.properties` — it contains developer-specific SDK paths and will break CI if present.
+
 ## Publishing to CocoaPods
 
 To publish to CocoaPods Trunk:
