@@ -162,6 +162,35 @@ Two options:
 
 The repository is configured to publish the FLIR SDK AARs into `mavenLocal` during the JitPack build (see `jitpack.yml`). That lets the `Flir` module resolve them by coordinates (`com.flir:thermalsdk:1.0.0` and `com.flir:androidsdk:1.0.0`) and prevents missing-class failures when JitPack builds the library.
 
+### SLF4J duplicate-class conflict
+
+If you see build errors about duplicate classes in `org.slf4j.*` (for example `Duplicate class org.slf4j.Logger`), this happens when:
+
+- The vendor AAR (androidsdk/thermalsdk) embeds SLF4J classes inside the AAR's classes.jar;
+- And your project or another dependency brings `org.slf4j:slf4j-api:...` as a separate jar. Gradle fails because the same classes exist twice.
+
+Two ways to resolve this without editing the vendor AAR:
+
+1) Exclude SLF4J API from your build (preferred when vendor AAR bundles SLF4J classes):
+
+    In your module's build.gradle.kts (or in the consuming app), add:
+
+    ```kotlin
+    configurations.all {
+         exclude(group = "org.slf4j", module = "slf4j-api")
+    }
+    ```
+
+    This prevents Gradle from pulling `slf4j-api` into the classpath and avoids duplicates.
+
+2) Provide a single canonical SLF4J provider at runtime (if your app needs the slf4j API):
+
+    Add a single SLF4J implementation/binding (for example `org.slf4j:slf4j-android` or an appropriate binding) and ensure other copies are excluded.
+
+Notes:
+- We updated the Flir module to exclude `org.slf4j:slf4j-api` so it will not bring the API transitively. If you're still seeing duplicates in your app, check other dependencies and exclude slf4j there or use option 1.
+- If you want me to, I can help you create a more robust fix (publishing Android AAR wrappers without embedded SLF4J or shading/relocating SLF4J) depending on your distribution needs.
+
 4. Check build status at: `https://jitpack.io/#PraveenOjha/Flir`
 
 ### Notes for CI / JitPack

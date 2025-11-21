@@ -41,6 +41,12 @@ dependencies {
     implementation("com.flir:androidsdk:1.0.0")
     // minimal compile deps to satisfy source references
     implementation("androidx.annotation:annotation:1.5.0")
+
+    // Prevent duplicate SLF4J classes when a consumer also brings `org.slf4j:slf4j-api`
+    // The vendor AAR may embed slf4j classes; exclude the API from being pulled transitively
+    configurations.all {
+        exclude(group = "org.slf4j", module = "slf4j-api")
+    }
 }
 
 publishing {
