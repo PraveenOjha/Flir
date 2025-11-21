@@ -1,7 +1,9 @@
 jdk:
   - openjdk21
 install:
-   - ./gradlew :Flir:publishToMavenLocal
+  - mvn install:install-file -Dfile=android/Flir/libs/thermalsdk-release.aar -DgroupId=com.flir -DartifactId=thermalsdk -Dversion=1.0.0 -Dpackaging=aar -DgeneratePom=true
+  - mvn install:install-file -Dfile=android/Flir/libs/androidsdk-release.aar -DgroupId=com.flir -DartifactId=androidsdk -Dversion=1.0.0 -Dpackaging=aar -DgeneratePom=true
+  - ./gradlew :Flir:publishToMavenLocal
 before_install:
   - sdk install java 21.0.1-open
   - sdk use java 21.0.1-open

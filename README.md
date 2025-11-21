@@ -152,6 +152,16 @@ git push origin 1.0.0
 
 3. JitPack will automatically build your library when someone requests it for the first time.
 
+### JitPack / CI notes for local AAR dependencies
+
+If your module includes local AARs (for example the FLIR SDK binaries under `android/Flir/libs/`), CI environments such as JitPack will not automatically resolve file-based dependencies. To publish or build on JitPack you must ensure those AARs are available to the build system.
+
+Two options:
+- Publish the AARs to a repository (mavenLocal or a remote Maven repo) before building the module.
+- Bundle the AARs into the final AAR using a "fat-AAR" approach.
+
+The repository is configured to publish the FLIR SDK AARs into `mavenLocal` during the JitPack build (see `jitpack.yml`). That lets the `Flir` module resolve them by coordinates (`com.flir:thermalsdk:1.0.0` and `com.flir:androidsdk:1.0.0`) and prevents missing-class failures when JitPack builds the library.
+
 4. Check build status at: `https://jitpack.io/#PraveenOjha/Flir`
 
 ### Notes for CI / JitPack
