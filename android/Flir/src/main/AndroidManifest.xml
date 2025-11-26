@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- ============================================ -->
+    <!-- FLIR Thermal SDK Required Permissions       -->
+    <!-- These will auto-merge into your app         -->
+    <!-- ============================================ -->
+
+    <!-- USB Host feature for FLIR ONE USB devices -->
+    <!-- This is the primary interface for FLIR ONE cameras -->
+    <uses-feature
+        android:name="android.hardware.usb.host"
+        android:required="false" />
+
+    <!-- Camera support for network-based FLIR cameras (ACE series) -->
+    <!-- Set to false so app can still install on devices without cameras -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
+    <!-- Camera permission for ACE cameras that use device camera -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+
+    <!-- Internet permission for ACE camera internal communication -->
+    <!-- Required by ACE SDK architecture for local network communication -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Note: USB permissions are handled at runtime via UsbPermissionHandler -->
+    <!-- No additional USB permissions needed in manifest -->
+
+</manifest>
