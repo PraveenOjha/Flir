@@ -30,26 +30,190 @@ yarn add flir-thermal-sdk
 
 The FLIR SDK binaries (~100MB) are **not bundled** with this package. They are downloaded on-demand when thermal features are first used.
 
+#### Quick Start
+
 ```typescript
+import React, { useState, useEffect } from 'react';
+import { View, Text, Button, ActivityIndicator } from 'react-native';
 import { FlirDownload, FlirModule } from 'flir-thermal-sdk';
 
-// Check if SDK is available
-const available = await FlirDownload.isAvailable();
+function ThermalCamera() {
+  const [sdkReady, setSdkReady] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [progress, setProgress] = useState(0);
 
-if (!available) {
-  // Show download size to user
-  const size = await FlirDownload.getDownloadSizeFormatted(); // "100 MB"
-  
-  // Download with progress
-  await FlirDownload.download((progress) => {
-    console.log(`${progress.percent.toFixed(0)}%`);
-    // Update UI with progress.bytesDownloaded, progress.totalBytes
-  });
+  useEffect(() => {
+    checkAndDownloadSDK();
+  }, []);
+
+  const checkAndDownloadSDK = async () => {
+    try {
+      // Check if SDK is already available
+      const available = await FlirDownload.isAvailable();
+      
+      if (available) {
+        setSdkReady(true);
+        return;
+      }
+
+      // Get download size to show user
+      const size = await FlirDownload.getDownloadSizeFormatted(); // "100 MB"
+      console.log(`SDK needs to be downloaded: ${size}`);
+
+      // Download with progress tracking
+      setDownloading(true);
+      await FlirDownload.download((progress) => {
+        setProgress(progress.percent);
+        console.log(`Downloading: ${progress.percent.toFixed(0)}%`);
+      });
+
+      setDownloading(false);
+      setSdkReady(true);
+      console.log('SDK ready!');
+    } catch (error) {
+      console.error('SDK download failed:', error);
+      setDownloading(false);
+    }
+  };
+
+  if (downloading) {
+    return (
+      <View>
+        <Text>Downloading FLIR SDK...</Text>
+        <Text>{progress.toFixed(0)}%</Text>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
+
+  if (!sdkReady) {
+    return (
+      <View>
+        <Text>FLIR SDK not available</Text>
+        <Button title="Download SDK" onPress={checkAndDownloadSDK} />
+      </View>
+    );
+  }
+
+  // SDK is ready, use FLIR features
+  return (
+    <View>
+      <Button title="Start Discovery" onPress={() => FlirModule.startDiscovery()} />
+    </View>
+  );
 }
-
-// Now use FLIR features
-FlirModule.startDiscovery();
 ```
+
+#### FlirDownload API Reference
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `isAvailable()` | `Promise<boolean>` | Check if SDK is already downloaded |
+| `getDownloadSize()` | `Promise<number>` | Get download size in bytes |
+| `getDownloadSizeFormatted()` | `Promise<string>` | Get human-readable size (e.g., "100 MB") |
+| `download(onProgress?)` | `Promise<void>` | Download SDK with optional progress callback |
+| `cancel()` | `void` | Cancel ongoing download |
+| `delete()` | `Promise<boolean>` | Remove downloaded SDK |
+
+#### Progress Callback
+
+```typescript
+await FlirDownload.download((progress) => {
+  console.log('Downloaded:', progress.bytesDownloaded);
+  console.log('Total:', progress.totalBytes);
+  console.log('Percent:', progress.percent); // 0-100
+});
+```
+
+#### Best Practices
+
+**1. Download on First Launch**
+```typescript
+// In your App.tsx or main component
+useEffect(() => {
+  const initSDK = async () => {
+    const available = await FlirDownload.isAvailable();
+    if (!available) {
+      // Show a modal or screen explaining the download
+      await FlirDownload.download((progress) => {
+        updateProgressBar(progress.percent);
+      });
+    }
+  };
+  initSDK();
+}, []);
+```
+
+**2. Download Before Feature Access**
+```typescript
+const openThermalCamera = async () => {
+  const available = await FlirDownload.isAvailable();
+  
+  if (!available) {
+    Alert.alert(
+      'Download Required',
+      'FLIR SDK needs to be downloaded (100 MB). Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Download', 
+          onPress: async () => {
+            await FlirDownload.download((p) => console.log(p.percent));
+            navigation.navigate('ThermalCamera');
+          }
+        }
+      ]
+    );
+  } else {
+    navigation.navigate('ThermalCamera');
+  }
+};
+```
+
+**3. Handle Errors**
+```typescript
+try {
+  await FlirDownload.download((progress) => {
+    setProgress(progress.percent);
+  });
+} catch (error) {
+  if (error.message.includes('Checksum')) {
+    Alert.alert('Download Error', 'File verification failed. Please try again.');
+  } else if (error.message.includes('Network')) {
+    Alert.alert('Network Error', 'Please check your internet connection.');
+  } else {
+    Alert.alert('Error', 'SDK download failed. Please try again.');
+  }
+}
+```
+
+**4. Show Download Size First**
+```typescript
+const size = await FlirDownload.getDownloadSizeFormatted();
+Alert.alert(
+  'Download Required',
+  `FLIR SDK (${size}) needs to be downloaded. This is a one-time download.`,
+  [
+    { text: 'Cancel' },
+    { text: 'Download', onPress: () => downloadSDK() }
+  ]
+);
+```
+
+#### Where SDKs Are Downloaded From
+
+- **Android**: GitHub Releases (with optional Google Play Feature Delivery support)
+- **iOS**: GitHub Releases
+- **Source**: https://github.com/PraveenOjha/flir-sdk-binaries/releases
+- **Security**: SHA256 checksum verification on all downloads
+
+#### Offline Usage
+
+Once downloaded, the SDK is stored permanently on the device:
+- **iOS**: `Application Support/FlirSDK/`
+- **Android**: App's internal storage
+
+No internet connection needed after initial download.
 
 ### Manual SDK Download (Development)
 
@@ -59,6 +223,38 @@ For development, you can pre-download the SDK:
 npm run download-sdk ios
 npm run download-sdk android
 ```
+
+### Advanced: Google Play Feature Delivery (Android)
+
+For production Android apps distributed via Google Play Store, you can use **Play Feature Delivery** to have Google host and serve the SDK binaries at zero cost.
+
+**Benefits:**
+- ✅ Zero hosting and bandwidth costs (Google serves the files)
+- ✅ Faster downloads via Google's CDN
+- ✅ Automatic updates with your app
+- ✅ Already implemented in the code!
+
+**Setup:**
+
+1. Create a dynamic feature module in your Android project:
+   ```
+   android/
+   ├── app/
+   └── flir_sdk/              # New feature module
+       ├── build.gradle.kts
+       └── src/main/AndroidManifest.xml
+   ```
+
+2. See detailed setup guide: [PLAY_FEATURE_DELIVERY_GUIDE.md](./PLAY_FEATURE_DELIVERY_GUIDE.md)
+
+3. The code automatically uses Play Feature Delivery when available, with GitHub download as fallback.
+
+**When to use:**
+- ✅ Production apps on Google Play Store
+- ✅ Want zero hosting costs
+- ❌ Development builds (use GitHub download instead)
+- ❌ Apps distributed outside Play Store (use GitHub download)
+
 
 ### Prerequisites
 
