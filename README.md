@@ -12,10 +12,53 @@ A React Native wrapper for the FLIR Thermal SDK, providing thermal imaging capab
 - 🎨 Customizable color palettes
 - 📊 Temperature measurement and analysis
 - ⚡ **Automatic permission setup** (no manual manifest/plist editing required)
+- 📦 **On-demand SDK download** (~100MB downloaded only when needed)
 - 🔌 USB & Bluetooth device support
 - 🎮 Emulator mode for development without hardware
 
 ## Installation
+
+### npm Installation
+
+```bash
+npm install flir-thermal-sdk
+# or
+yarn add flir-thermal-sdk
+```
+
+### On-Demand SDK Download
+
+The FLIR SDK binaries (~100MB) are **not bundled** with this package. They are downloaded on-demand when thermal features are first used.
+
+```typescript
+import { FlirDownload, FlirModule } from 'flir-thermal-sdk';
+
+// Check if SDK is available
+const available = await FlirDownload.isAvailable();
+
+if (!available) {
+  // Show download size to user
+  const size = await FlirDownload.getDownloadSizeFormatted(); // "100 MB"
+  
+  // Download with progress
+  await FlirDownload.download((progress) => {
+    console.log(`${progress.percent.toFixed(0)}%`);
+    // Update UI with progress.bytesDownloaded, progress.totalBytes
+  });
+}
+
+// Now use FLIR features
+FlirModule.startDiscovery();
+```
+
+### Manual SDK Download (Development)
+
+For development, you can pre-download the SDK:
+
+```bash
+npm run download-sdk ios
+npm run download-sdk android
+```
 
 ### Prerequisites
 

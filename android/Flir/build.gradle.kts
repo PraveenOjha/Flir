@@ -1,5 +1,6 @@
 plugins {
     id("com.android.library")
+    id("org.jetbrains.kotlin.android")
     id("maven-publish")
 }
 
@@ -16,6 +17,10 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
     }
 
     publishing {
@@ -35,6 +40,16 @@ repositories {
 }
 
 dependencies {
+    // React Native
+    implementation("com.facebook.react:react-native:+")
+    
+    // Kotlin coroutines for async downloads
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    
+    // Play Feature Delivery (optional - for Play Store SDK delivery)
+    implementation("com.google.android.play:feature-delivery:2.1.0")
+    implementation("com.google.android.play:feature-delivery-ktx:2.1.0")
+    
     // FLIR SDK binary artifacts placed in libs/
     // On CI (JitPack) we install these AARs into mavenLocal before publishing - use maven coordinates
     implementation("com.flir:thermalsdk:1.0.0")

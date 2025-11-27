@@ -1,8 +1,11 @@
 const {
   withInfoPlist,
   withAndroidManifest,
+  withDangerousMod,
   createRunOncePlugin,
 } = require('@expo/config-plugins');
+const fs = require('fs');
+const path = require('path');
 
 /**
  * FLIR Thermal SDK Config Plugin
@@ -135,14 +138,47 @@ const withFlirAndroidManifest = (config) => {
 };
 
 /**
+ * Copies sdk-manifest.json to iOS project
+ */
+const withFlirManifest = (config) => {
+  return withDangerousMod(config, [
+    'ios',
+    async (config) => {
+      const src = path.join(__dirname, 'sdk-manifest.json');
+      const dst = path.join(config.modRequest.platformProjectRoot, 'sdk-manifest.json');
+      fs.copyFileSync(src, dst);
+      return config;
+    },
+  ]);
+};
+
+/**
+ * Copies sdk-manifest.json to Android assets
+ */
+const withFlirAndroidAssets = (config) => {
+  return withDangerousMod(config, [
+    'android',
+    async (config) => {
+      const src = path.join(__dirname, 'sdk-manifest.json');
+      const dst = path.join(config.modRequest.platformProjectRoot, 'app/src/main/assets/sdk-manifest.json');
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(src, dst);
+      return config;
+    },
+  ]);
+};
+
+/**
  * Main plugin that combines iOS and Android configurations
  */
 const withFlirThermalSDK = (config, props = {}) => {
   // Apply iOS modifications
   config = withFlirInfoPlist(config, props);
+  config = withFlirManifest(config);
 
   // Apply Android modifications
   config = withFlirAndroidManifest(config);
+  config = withFlirAndroidAssets(config);
 
   return config;
 };
@@ -150,5 +186,5 @@ const withFlirThermalSDK = (config, props = {}) => {
 module.exports = createRunOncePlugin(
   withFlirThermalSDK,
   'flir-thermal-sdk',
-  '1.0.4'
+  '2.0.0'
 );

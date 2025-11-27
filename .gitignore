@@ -82,3 +82,10 @@ jspm_packages/
 
 # dotenv environment variables file
 .env
+
+# SDK binaries (downloaded on-demand)
+ios/Flir/libs/*.framework
+ios/Flir/libs/*.dylib
+android/Flir/libs/*.aar
+!ios/Flir/libs/.gitkeep
+!android/Flir/libs/.gitkeep
