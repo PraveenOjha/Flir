@@ -1,13 +1,14 @@
 const {
   withInfoPlist,
+  withAndroidManifest,
   createRunOncePlugin,
 } = require('@expo/config-plugins');
 
 /**
  * FLIR Thermal SDK Config Plugin
  * 
- * Automatically adds required iOS Info.plist entries for FLIR device support.
- * This eliminates the need for manual Info.plist editing.
+ * Automatically adds required iOS Info.plist and Android AndroidManifest.xml 
+ * entries for FLIR device support. This eliminates the need for manual editing.
  * 
  * Usage in app.json:
  * {
@@ -31,14 +32,14 @@ const EXTERNAL_ACCESSORY_PROTOCOLS = [
   'com.flir.rosebud.fileio',
 ];
 
-const DEFAULT_BLUETOOTH_ALWAYS_DESCRIPTION = 
+const DEFAULT_BLUETOOTH_ALWAYS_DESCRIPTION =
   'This app requires Bluetooth to connect to FLIR thermal cameras via Bluetooth Low Energy';
 
-const DEFAULT_BLUETOOTH_PERIPHERAL_DESCRIPTION = 
+const DEFAULT_BLUETOOTH_PERIPHERAL_DESCRIPTION =
   'This app uses Bluetooth to communicate with FLIR thermal imaging devices';
 
 /**
- * Adds FLIR-specific Info.plist entries
+ * Adds FLIR-specific Info.plist entries for iOS
  */
 const withFlirInfoPlist = (config, props = {}) => {
   return withInfoPlist(config, (config) => {
@@ -63,14 +64,14 @@ const withFlirInfoPlist = (config, props = {}) => {
     // iOS 13+ requires NSBluetoothAlwaysUsageDescription
     if (!infoPlist.NSBluetoothAlwaysUsageDescription) {
       infoPlist.NSBluetoothAlwaysUsageDescription =
-        props.bluetoothAlwaysUsageDescription || 
+        props.bluetoothAlwaysUsageDescription ||
         DEFAULT_BLUETOOTH_ALWAYS_DESCRIPTION;
     }
 
     // Older iOS versions (pre-13) require NSBluetoothPeripheralUsageDescription
     if (!infoPlist.NSBluetoothPeripheralUsageDescription) {
       infoPlist.NSBluetoothPeripheralUsageDescription =
-        props.bluetoothPeripheralUsageDescription || 
+        props.bluetoothPeripheralUsageDescription ||
         DEFAULT_BLUETOOTH_PERIPHERAL_DESCRIPTION;
     }
 
@@ -78,8 +79,76 @@ const withFlirInfoPlist = (config, props = {}) => {
   });
 };
 
+/**
+ * Adds FLIR-specific AndroidManifest.xml entries for Android
+ */
+const withFlirAndroidManifest = (config) => {
+  return withAndroidManifest(config, (config) => {
+    const androidManifest = config.modResults;
+    const mainApplication = androidManifest.manifest;
+
+    // Ensure uses-feature array exists
+    if (!mainApplication['uses-feature']) {
+      mainApplication['uses-feature'] = [];
+    }
+
+    // Ensure uses-permission array exists
+    if (!mainApplication['uses-permission']) {
+      mainApplication['uses-permission'] = [];
+    }
+
+    // Add USB host feature for FLIR ONE USB devices
+    const usbHostFeature = {
+      $: {
+        'android:name': 'android.hardware.usb.host',
+        'android:required': 'false',
+      },
+    };
+
+    // Check if USB host feature already exists
+    const hasUsbHost = mainApplication['uses-feature'].some(
+      (feature) => feature.$?.['android:name'] === 'android.hardware.usb.host'
+    );
+
+    if (!hasUsbHost) {
+      mainApplication['uses-feature'].push(usbHostFeature);
+    }
+
+    // Add camera permission for FLIR cameras
+    const cameraPermission = {
+      $: {
+        'android:name': 'android.permission.CAMERA',
+      },
+    };
+
+    // Check if camera permission already exists
+    const hasCameraPermission = mainApplication['uses-permission'].some(
+      (permission) => permission.$?.['android:name'] === 'android.permission.CAMERA'
+    );
+
+    if (!hasCameraPermission) {
+      mainApplication['uses-permission'].push(cameraPermission);
+    }
+
+    return config;
+  });
+};
+
+/**
+ * Main plugin that combines iOS and Android configurations
+ */
+const withFlirThermalSDK = (config, props = {}) => {
+  // Apply iOS modifications
+  config = withFlirInfoPlist(config, props);
+
+  // Apply Android modifications
+  config = withFlirAndroidManifest(config);
+
+  return config;
+};
+
 module.exports = createRunOncePlugin(
-  withFlirInfoPlist,
+  withFlirThermalSDK,
   'flir-thermal-sdk',
-  '1.0.0'
+  '1.0.4'
 );

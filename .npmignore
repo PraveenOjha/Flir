@@ -1,0 +1,34 @@
+# NPM Publishing Configuration
+# Exclude development and build artifacts from npm package
+
+# Version control
+.git/
+.gitignore
+
+# Dependencies
+node_modules/
+
+# Build artifacts
+build/
+.gradle/
+*.log
+
+# Android local config
+local.properties
+
+# macOS
+.DS_Store
+
+# Development scripts
+scripts/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test files
+__tests__/
+*.test.js
+*.spec.js
