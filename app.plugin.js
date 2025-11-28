@@ -15,13 +15,13 @@ const path = require('path');
  * 
  * Usage in app.json:
  * {
- *   "plugins": ["flir-thermal-sdk"]
+ *   "plugins": ["ilabs-flir"]
  * }
  * 
  * Or with custom descriptions:
  * {
  *   "plugins": [
- *     ["flir-thermal-sdk", {
+ *     ["ilabs-flir", {
  *       "bluetoothAlwaysUsageDescription": "Custom description here",
  *       "bluetoothPeripheralUsageDescription": "Custom description here"
  *     }]
@@ -186,8 +186,8 @@ const withFlirAndroidGradle = (config) => {
         const settingsGradlePath = path.join(projectRoot, 'settings.gradle');
         const appBuildGradlePath = path.join(projectRoot, 'app', 'build.gradle');
 
-        const moduleRelPath = '../node_modules/flir-thermal-sdk/android/Flir';
-        const includeSnippet = `\n// flir-thermal-sdk: include Flir module\nif (new File(rootProject.projectDir, '${moduleRelPath}').exists()) {\n    include ':Flir'\n    project(':Flir').projectDir = new File(rootProject.projectDir, '${moduleRelPath}')\n}\n`;
+        const moduleRelPath = '../node_modules/ilabs-flir/android/Flir';
+        const includeSnippet = `\n// ilabs-flir: include Flir module\nif (new File(rootProject.projectDir, '${moduleRelPath}').exists()) {\n    include ':Flir'\n    project(':Flir').projectDir = new File(rootProject.projectDir, '${moduleRelPath}')\n}\n`;
 
         if (fs.existsSync(settingsGradlePath)) {
           let settingsTxt = fs.readFileSync(settingsGradlePath, 'utf8');
@@ -200,7 +200,7 @@ const withFlirAndroidGradle = (config) => {
           let buildTxt = fs.readFileSync(appBuildGradlePath, 'utf8');
           // Only add implementation project(':Flir') if it's not already present
           if (!/project\('\:Flir'\)/.test(buildTxt)) {
-            const depSnippet = `\n    // flir-thermal-sdk: include :Flir when available\n    if (new File(rootDir.getParent(), '${moduleRelPath}').exists()) {\n        implementation project(':Flir')\n    }\n`;
+            const depSnippet = `\n    // ilabs-flir: include :Flir when available\n    if (new File(rootDir.getParent(), '${moduleRelPath}').exists()) {\n        implementation project(':Flir')\n    }\n`;
 
             // Find the first 'dependencies {' occurrence and find its matching closing brace
             const depIndex = buildTxt.search(/\bdependencies\s*\{/);
@@ -259,6 +259,6 @@ const withFlirThermalSDK = (config, props = {}) => {
 
 module.exports = createRunOncePlugin(
   withFlirThermalSDK,
-  'flir-thermal-sdk',
+  'ilabs-flir',
   '2.0.2'
 );

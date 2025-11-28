@@ -23,7 +23,8 @@ Pod::Spec.new do |s|
   
   s.pod_target_xcconfig = {
     'OTHER_LDFLAGS' => '-weak_framework ThermalSDK',
-    'ENABLE_BITCODE' => 'NO'
+    'ENABLE_BITCODE' => 'NO',
+    'HEADER_SEARCH_PATHS' => '"$(PODS_TARGET_SRCROOT)/ios/Flir/Framework"'
   }
   
   s.dependency 'React-Core'

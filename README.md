@@ -21,9 +21,9 @@ A React Native wrapper for the FLIR Thermal SDK, providing thermal imaging capab
 ### npm Installation
 
 ```bash
-npm install flir-thermal-sdk
+npm install ilabs-flir
 # or
-yarn add flir-thermal-sdk
+yarn add ilabs-flir
 ```
 
 ### On-Demand SDK Download
@@ -35,7 +35,7 @@ The FLIR SDK binaries (~100MB) are **not bundled** with this package. They are d
 ```typescript
 import React, { useState, useEffect } from 'react';
 import { View, Text, Button, ActivityIndicator } from 'react-native';
-import { FlirDownload, FlirModule } from 'flir-thermal-sdk';
+import { FlirDownload, FlirModule } from 'ilabs-flir';
 
 function ThermalCamera() {
   const [sdkReady, setSdkReady] = useState(false);
@@ -320,7 +320,7 @@ Add to your `app.json`:
 
 ```json
 {
-  "plugins": ["flir-thermal-sdk"]
+  "plugins": ["ilabs-flir"]
 }
 ```
 

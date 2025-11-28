@@ -50,12 +50,14 @@ dependencies {
     implementation("com.google.android.play:feature-delivery:2.1.0")
     implementation("com.google.android.play:feature-delivery-ktx:2.1.0")
     
-    // FLIR SDK binary artifacts placed in libs/
-    // On CI (JitPack) we install these AARs into mavenLocal before publishing - use maven coordinates
-    implementation("com.flir:thermalsdk:1.0.0")
-    implementation("com.flir:androidsdk:1.0.0")
-    // minimal compile deps to satisfy source references
+    // FLIR SDK binary artifacts - compileOnly since they're downloaded on-demand at runtime
+    // These are needed for compilation but NOT bundled with the app
+    // Users download them at runtime via FlirDownload.download()
+    compileOnly(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
+    
+    // Minimal compile deps to satisfy source references
     implementation("androidx.annotation:annotation:1.5.0")
+
 
     // Prevent duplicate SLF4J classes when a consumer also brings `org.slf4j:slf4j-api`
     // The vendor AAR may embed slf4j classes; exclude the API from being pulled transitively

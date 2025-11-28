@@ -1,4 +1,4 @@
-rootProject.name = "flir-thermal-sdk"
+rootProject.name = "ilabs-flir"
 
 // The Android module folder was renamed to `Flir` (capital F) — keep Gradle project path consistent
 include(":Flir")
