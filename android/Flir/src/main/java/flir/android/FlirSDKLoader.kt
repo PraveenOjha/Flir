@@ -27,8 +27,11 @@ object FlirSDKLoader {
         splitInstallManager?.installedModules?.let {
             if (FEATURE_MODULE in it) return true
         }
-        // Check direct download
-        return File(getSDKDirectory(context), "thermalsdk.aar").exists()
+        // Check direct download - look for either file from the manifest
+        val sdkDir = getSDKDirectory(context)
+        return File(sdkDir, "thermalsdk-release.aar").exists() || 
+               File(sdkDir, "androidsdk-release.aar").exists() ||
+               File(sdkDir, "thermalsdk.aar").exists()
     }
     
     fun getDownloadSize(context: Context): Long {
@@ -70,7 +73,8 @@ object FlirSDKLoader {
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val manifest = loadManifest(context) ?: return@withContext Result.failure(
-                Exception("Failed to load manifest"))
+                Exception("Failed to load manifest")
+            )
             
             val downloadUrl = manifest.android.directDownload.downloadUrl
             val expectedHash = manifest.android.directDownload.sha256
