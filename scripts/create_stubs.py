@@ -81,13 +81,32 @@ public class Identity {
     public CommunicationInterface communicationInterface;
 }
 """,
+    "com/flir/thermalsdk/ErrorCode.java": """
+package com.flir.thermalsdk;
+public class ErrorCode {}
+""",
+    "com/flir/thermalsdk/live/discovery/DiscoveredCamera.java": """
+package com.flir.thermalsdk.live.discovery;
+import com.flir.thermalsdk.live.Identity;
+public class DiscoveredCamera {
+    public Identity identity;
+}
+""",
     "com/flir/thermalsdk/live/connectivity/ConnectionStatusListener.java": """
 package com.flir.thermalsdk.live.connectivity;
-public interface ConnectionStatusListener {}
+import com.flir.thermalsdk.ErrorCode;
+public interface ConnectionStatusListener {
+    void onDisconnected(ErrorCode errorCode);
+}
 """,
     "com/flir/thermalsdk/live/discovery/DiscoveryEventListener.java": """
 package com.flir.thermalsdk.live.discovery;
-public interface DiscoveryEventListener {}
+import com.flir.thermalsdk.live.CommunicationInterface;
+import com.flir.thermalsdk.ErrorCode;
+public interface DiscoveryEventListener {
+    void onCameraFound(DiscoveredCamera camera);
+    void onDiscoveryError(CommunicationInterface communicationInterface, ErrorCode errorCode);
+}
 """,
     "com/flir/thermalsdk/live/discovery/DiscoveryFactory.java": """
 package com.flir.thermalsdk.live.discovery;
