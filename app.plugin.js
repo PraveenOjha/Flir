@@ -169,6 +169,78 @@ const withFlirAndroidAssets = (config) => {
 };
 
 /**
+ * Ensure the Flir Android Gradle module is included in generated projects.
+ *
+ * Some workflows (Expo prebuild) won't add node_modules subprojects to
+ * settings.gradle automatically unless the package exposes autolinking or
+ * the plugin performs the edit. When a consumer installs the package and
+ * runs prebuild, include the Flir module and wire an app dependency so the
+ * native bridge (FlirDownloadManager) is compiled into the app.
+ */
+const withFlirAndroidGradle = (config) => {
+  return withDangerousMod(config, [
+    'android',
+    async (config) => {
+      try {
+        const projectRoot = config.modRequest.platformProjectRoot;
+        const settingsGradlePath = path.join(projectRoot, 'settings.gradle');
+        const appBuildGradlePath = path.join(projectRoot, 'app', 'build.gradle');
+
+        const moduleRelPath = '../node_modules/flir-thermal-sdk/android/Flir';
+        const includeSnippet = `\n// flir-thermal-sdk: include Flir module\nif (new File(rootProject.projectDir, '${moduleRelPath}').exists()) {\n    include ':Flir'\n    project(':Flir').projectDir = new File(rootProject.projectDir, '${moduleRelPath}')\n}\n`;
+
+        if (fs.existsSync(settingsGradlePath)) {
+          let settingsTxt = fs.readFileSync(settingsGradlePath, 'utf8');
+          if (!/include\s*':Flir'/.test(settingsTxt)) {
+            fs.appendFileSync(settingsGradlePath, includeSnippet, 'utf8');
+          }
+        }
+
+        if (fs.existsSync(appBuildGradlePath)) {
+          let buildTxt = fs.readFileSync(appBuildGradlePath, 'utf8');
+          // Only add implementation project(':Flir') if it's not already present
+          if (!/project\('\:Flir'\)/.test(buildTxt)) {
+            const depSnippet = `\n    // flir-thermal-sdk: include :Flir when available\n    if (new File(rootDir.getParent(), '${moduleRelPath}').exists()) {\n        implementation project(':Flir')\n    }\n`;
+
+            // Find the first 'dependencies {' occurrence and find its matching closing brace
+            const depIndex = buildTxt.search(/\bdependencies\s*\{/);
+            if (depIndex !== -1) {
+              // Walk forward to find the matching closing brace for the dependencies block
+              let depth = 0;
+              let insertPos = -1;
+              for (let i = depIndex; i < buildTxt.length; i++) {
+                const ch = buildTxt[i];
+                if (ch === '{') depth++;
+                else if (ch === '}') {
+                  depth--;
+                  if (depth === 0) { insertPos = i; break; }
+                }
+              }
+
+              if (insertPos !== -1) {
+                // Insert snippet just before the closing '}' of the dependencies block
+                buildTxt = buildTxt.slice(0, insertPos) + depSnippet + buildTxt.slice(insertPos);
+                fs.writeFileSync(appBuildGradlePath, buildTxt, 'utf8');
+              } else {
+                // Fallback: append to the file
+                fs.appendFileSync(appBuildGradlePath, '\n' + depSnippet, 'utf8');
+              }
+            } else {
+              // No dependencies block found! Append a new one with the snippet.
+              fs.appendFileSync(appBuildGradlePath, '\n' + 'dependencies {' + depSnippet + '\n}\n', 'utf8');
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[flir-config-plugin] Failed to patch Android Gradle files:', err && err.message);
+      }
+
+      return config;
+    },
+  ]);
+};
+
+/**
  * Main plugin that combines iOS and Android configurations
  */
 const withFlirThermalSDK = (config, props = {}) => {
@@ -179,6 +251,8 @@ const withFlirThermalSDK = (config, props = {}) => {
   // Apply Android modifications
   config = withFlirAndroidManifest(config);
   config = withFlirAndroidAssets(config);
+  // Ensure the Flir Gradle module is included in generated native projects
+  config = withFlirAndroidGradle(config);
 
   return config;
 };
@@ -186,5 +260,5 @@ const withFlirThermalSDK = (config, props = {}) => {
 module.exports = createRunOncePlugin(
   withFlirThermalSDK,
   'flir-thermal-sdk',
-  '2.0.0'
+  '2.0.2'
 );

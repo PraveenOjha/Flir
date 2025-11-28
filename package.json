@@ -1,6 +1,6 @@
 {
   "name": "flir-thermal-sdk",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "FLIR Thermal SDK for React Native - On-Demand Download",
   "main": "src/index.js",
   "types": "src/index.d.ts",
