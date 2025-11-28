@@ -1,18 +1,9 @@
 {
   "name": "flir-thermal-sdk",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "FLIR Thermal SDK for React Native - On-Demand Download",
   "main": "src/index.js",
   "types": "src/index.d.ts",
-  "react-native": {
-    "android": {
-      "sourceDir": "android/Flir"
-    },
-    "ios": {
-      "sourceDir": "ios/Flir",
-      "podspec": "Flir.podspec"
-    }
-  },
   "scripts": {
     "download-sdk": "node scripts/download-sdk.js",
     "typecheck": "tsc --noEmit"
@@ -28,7 +19,9 @@
     "app.plugin.js",
     "Flir.podspec",
     "sdk-manifest.json",
-    "scripts/"
+    "scripts/",
+    "expo-module.config.json",
+    "react-native.config.js"
   ],
   "keywords": [
     "flir",
