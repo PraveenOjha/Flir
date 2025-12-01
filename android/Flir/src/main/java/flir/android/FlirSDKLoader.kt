@@ -1,90 +1,176 @@
 package flir.android
 
 import android.content.Context
-import com.google.android.play.core.splitinstall.*
-import com.google.android.play.core.splitinstall.model.SplitInstallSessionStatus
+import android.os.Build
+import android.util.Log
 import kotlinx.coroutines.*
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
 import java.net.URL
-import java.security.MessageDigest
 import java.util.zip.ZipInputStream
 
+/**
+ * FlirSDKLoader - Downloads and manages architecture-specific FLIR SDK packages
+ * 
+ * Each package contains:
+ * - classes.dex (combined DEX from thermalsdk + androidsdk)
+ * - Native .so libraries in jni/{arch}/ folder
+ * 
+ * URLs are read from sdk-manifest.json in assets folder
+ */
 object FlirSDKLoader {
     
-    private const val FEATURE_MODULE = "flir_sdk"
-    private var splitInstallManager: SplitInstallManager? = null
+    private const val TAG = "FlirSDKLoader"
     
-    fun init(context: Context) {
-        splitInstallManager = SplitInstallManagerFactory.create(context)
-    }
+    // Cached manifest data
+    private var cachedManifest: SDKManifest? = null
+    
+    // Manifest data classes
+    data class ArchPackage(val downloadUrl: String, val sizeBytes: Long)
+    data class SDKManifest(val version: String, val packages: Map<String, ArchPackage>)
     
     private fun getSDKDirectory(context: Context) = File(context.filesDir, "FlirSDK")
     
-    fun isSDKAvailable(context: Context): Boolean {
-        // Check Play Feature module
-        splitInstallManager?.installedModules?.let {
-            if (FEATURE_MODULE in it) return true
+    /**
+     * Load manifest from assets
+     */
+    private fun loadManifest(context: Context): SDKManifest? {
+        if (cachedManifest != null) return cachedManifest
+        
+        return try {
+            val json = context.assets.open("sdk-manifest.json").bufferedReader().readText()
+            val root = JSONObject(json)
+            val android = root.getJSONObject("android")
+            val packagesJson = android.getJSONObject("packages")
+            
+            val packages = mutableMapOf<String, ArchPackage>()
+            packagesJson.keys().forEach { arch ->
+                val pkg = packagesJson.getJSONObject(arch)
+                packages[arch] = ArchPackage(
+                    downloadUrl = pkg.getString("downloadUrl"),
+                    sizeBytes = pkg.getLong("sizeBytes")
+                )
+            }
+            
+            SDKManifest(
+                version = root.getString("version"),
+                packages = packages
+            ).also { cachedManifest = it }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load manifest: ${e.message}")
+            null
         }
-        // Check direct download - look for either file from the manifest
-        val sdkDir = getSDKDirectory(context)
-        return File(sdkDir, "thermalsdk-release.aar").exists() || 
-               File(sdkDir, "androidsdk-release.aar").exists() ||
-               File(sdkDir, "thermalsdk.aar").exists()
     }
     
-    fun getDownloadSize(context: Context): Long {
-        return loadManifest(context)?.android?.directDownload?.sizeBytes ?: 52_428_800L
-    }
-    
-    fun downloadViaPlayStore(
-        onProgress: (Float) -> Unit,
-        onComplete: () -> Unit,
-        onError: (String) -> Unit
-    ) {
-        val manager = splitInstallManager ?: run {
-            onError("SplitInstallManager not initialized")
-            return
-        }
+    /**
+     * Get the primary ABI for this device
+     */
+    fun getDeviceArch(): String {
+        val supportedAbis = Build.SUPPORTED_ABIS
+        Log.d(TAG, "Device supported ABIs: ${supportedAbis.joinToString()}")
         
-        val request = SplitInstallRequest.newBuilder()
-            .addModule(FEATURE_MODULE)
-            .build()
-        
-        manager.registerListener { state ->
-            when (state.status()) {
-                SplitInstallSessionStatus.DOWNLOADING -> {
-                    val progress = state.bytesDownloaded().toFloat() / state.totalBytesToDownload()
-                    onProgress(progress)
-                }
-                SplitInstallSessionStatus.INSTALLED -> onComplete()
-                SplitInstallSessionStatus.FAILED -> onError("Install failed: ${state.errorCode()}")
-                else -> {}
+        val knownArchs = setOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        for (abi in supportedAbis) {
+            if (abi in knownArchs) {
+                Log.d(TAG, "Selected ABI: $abi")
+                return abi
             }
         }
-        
-        manager.startInstall(request)
+        return "arm64-v8a"
     }
     
-    suspend fun downloadDirect(
+    /**
+     * Check if SDK is already downloaded
+     */
+    fun isSDKAvailable(context: Context): Boolean {
+        val sdkDir = getSDKDirectory(context)
+        val arch = getDeviceArch()
+        
+        val dexFile = File(sdkDir, "classes.dex")
+        val soDir = File(sdkDir, "jni/$arch")
+        
+        val hasDex = dexFile.exists() && dexFile.length() > 0
+        val hasSo = soDir.exists() && soDir.listFiles()?.isNotEmpty() == true
+        
+        Log.d(TAG, "SDK available: dex=$hasDex, so=$hasSo")
+        return hasDex && hasSo
+    }
+    
+    /**
+     * Get path to the DEX file
+     */
+    fun getDexPath(context: Context): File? {
+        val dexFile = File(getSDKDirectory(context), "classes.dex")
+        return if (dexFile.exists()) dexFile else null
+    }
+    
+    /**
+     * Get path to native libraries directory
+     */
+    fun getNativeLibDir(context: Context): File? {
+        val arch = getDeviceArch()
+        val libDir = File(getSDKDirectory(context), "jni/$arch")
+        return if (libDir.exists()) libDir else null
+    }
+    
+    /**
+     * Get estimated download size from manifest
+     */
+    fun getDownloadSize(context: Context): Long {
+        val manifest = loadManifest(context) ?: return 15_000_000L
+        val arch = getDeviceArch()
+        return manifest.packages[arch]?.sizeBytes ?: 15_000_000L
+    }
+    
+    /**
+     * Download the SDK package for this device's architecture
+     */
+    suspend fun downloadSDK(
         context: Context,
         onProgress: (downloaded: Long, total: Long) -> Unit
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val manifest = loadManifest(context) ?: return@withContext Result.failure(
-                Exception("Failed to load manifest")
-            )
+            val arch = getDeviceArch()
+            val manifest = loadManifest(context) 
+                ?: return@withContext Result.failure(Exception("Failed to load manifest"))
             
-            val downloadUrl = manifest.android.directDownload.downloadUrl
-            val expectedHash = manifest.android.directDownload.sha256
-            val totalSize = manifest.android.directDownload.sizeBytes
+            val archPackage = manifest.packages[arch]
+                ?: return@withContext Result.failure(Exception("No package for architecture: $arch"))
+            
+            val downloadUrl = archPackage.downloadUrl
+            Log.i(TAG, "Downloading SDK for $arch from $downloadUrl")
             
             val sdkDir = getSDKDirectory(context).apply { mkdirs() }
-            val zipFile = File(context.cacheDir, "flir-sdk.zip")
+            val zipFile = File(context.cacheDir, "flir-sdk-$arch.zip")
             
-            // Download
-            URL(downloadUrl).openStream().use { input ->
+            // Download with redirect handling (GitHub uses 302 redirects)
+            var connection = URL(downloadUrl).openConnection() as HttpURLConnection
+            connection.instanceFollowRedirects = true
+            connection.connectTimeout = 30000
+            connection.readTimeout = 60000
+            
+            // Handle redirects manually for cross-protocol redirects
+            var redirectCount = 0
+            while (connection.responseCode in 301..302 && redirectCount < 5) {
+                val redirectUrl = connection.getHeaderField("Location")
+                Log.d(TAG, "Redirect to: $redirectUrl")
+                connection.disconnect()
+                connection = URL(redirectUrl).openConnection() as HttpURLConnection
+                connection.instanceFollowRedirects = true
+                redirectCount++
+            }
+            
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                return@withContext Result.failure(Exception("HTTP error ${connection.responseCode}"))
+            }
+            
+            val totalSize = connection.contentLengthLong.let { 
+                if (it > 0) it else archPackage.sizeBytes
+            }
+            
+            connection.inputStream.use { input ->
                 FileOutputStream(zipFile).use { output ->
                     val buffer = ByteArray(8192)
                     var totalRead = 0L
@@ -99,97 +185,59 @@ object FlirSDKLoader {
                     }
                 }
             }
+            connection.disconnect()
             
-            // Verify checksum
-            val actualHash = sha256(zipFile)
-            if (actualHash != expectedHash) {
-                zipFile.delete()
-                return@withContext Result.failure(SecurityException("Checksum mismatch"))
-            }
+            Log.i(TAG, "Download complete: ${zipFile.length()} bytes")
             
             // Extract
             unzip(zipFile, sdkDir)
             zipFile.delete()
             
+            // Verify
+            val dexFile = File(sdkDir, "classes.dex")
+            val soDir = File(sdkDir, "jni/$arch")
+            
+            if (!dexFile.exists()) {
+                return@withContext Result.failure(Exception("DEX file not extracted"))
+            }
+            
+            dexFile.setReadOnly()
+            Log.i(TAG, "SDK installed: dex=${dexFile.length()} bytes, libs=${soDir.listFiles()?.size ?: 0} files")
+            
             Result.success(Unit)
         } catch (e: Exception) {
+            Log.e(TAG, "Download failed", e)
             Result.failure(e)
         }
     }
     
+    /**
+     * Delete downloaded SDK
+     */
     fun deleteSDK(context: Context): Boolean {
-        splitInstallManager?.deferredUninstall(listOf(FEATURE_MODULE))
         return getSDKDirectory(context).deleteRecursively()
     }
     
-    private fun loadManifest(context: Context): SDKManifest? {
-        return try {
-            val json = context.assets.open("sdk-manifest.json").bufferedReader().readText()
-            SDKManifest.fromJson(json)
-        } catch (e: Exception) { null }
-    }
-    
-    private fun sha256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(8192)
-            var bytesRead: Int
-            while (input.read(buffer).also { bytesRead = it } != -1) {
-                digest.update(buffer, 0, bytesRead)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
-    }
-    
     private fun unzip(source: File, destination: File) {
+        Log.d(TAG, "Extracting ${source.name} to ${destination.absolutePath}")
+        
         ZipInputStream(source.inputStream()).use { zip ->
             var entry = zip.nextEntry
             while (entry != null) {
                 val file = File(destination, entry.name)
+                Log.d(TAG, "  Extracting: ${entry.name}")
+                
                 if (entry.isDirectory) {
                     file.mkdirs()
                 } else {
                     file.parentFile?.mkdirs()
-                    file.outputStream().use { zip.copyTo(it) }
+                    file.outputStream().use { output ->
+                        zip.copyTo(output)
+                    }
                 }
+                zip.closeEntry()
                 entry = zip.nextEntry
             }
-        }
-    }
-}
-
-data class SDKManifest(
-    val version: String,
-    val android: AndroidManifest
-) {
-    data class AndroidManifest(
-        val playFeatureModule: String,
-        val directDownload: DirectDownload
-    )
-    
-    data class DirectDownload(
-        val downloadUrl: String,
-        val sha256: String,
-        val sizeBytes: Long
-    )
-    
-    companion object {
-        fun fromJson(json: String): SDKManifest {
-            val root = JSONObject(json)
-            val android = root.getJSONObject("android")
-            val direct = android.getJSONObject("directDownload")
-            
-            return SDKManifest(
-                version = root.getString("version"),
-                android = AndroidManifest(
-                    playFeatureModule = android.getString("playFeatureModule"),
-                    directDownload = DirectDownload(
-                        downloadUrl = direct.getString("downloadUrl"),
-                        sha256 = direct.getString("sha256"),
-                        sizeBytes = direct.getLong("sizeBytes")
-                    )
-                )
-            )
         }
     }
 }

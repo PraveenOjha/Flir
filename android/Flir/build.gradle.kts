@@ -22,6 +22,12 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    
+    java {
+        toolchain {
+            languageVersion.set(JavaLanguageVersion.of(21))
+        }
+    }
 
     publishing {
         singleVariant("release") {
@@ -50,10 +56,9 @@ dependencies {
     implementation("com.google.android.play:feature-delivery:2.1.0")
     implementation("com.google.android.play:feature-delivery-ktx:2.1.0")
     
-    // FLIR SDK binary artifacts - compileOnly since they're downloaded on-demand at runtime
-    // These are needed for compilation but NOT bundled with the app
-    // Users download them at runtime via FlirDownload.download()
-    compileOnly(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
+    // FLIR SDK - Use stub JAR for compilation (AARs are Java 21, stubs work with Java 17)
+    // The actual SDK AARs are downloaded on-demand at runtime via FlirDownload.download()
+    compileOnly(files("libs/flir-stubs.jar"))
     
     // Minimal compile deps to satisfy source references
     implementation("androidx.annotation:annotation:1.5.0")

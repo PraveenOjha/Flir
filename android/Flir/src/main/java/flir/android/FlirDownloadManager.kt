@@ -12,10 +12,6 @@ class FlirDownloadManager(private val reactContext: ReactApplicationContext) :
     
     override fun getName() = "FlirDownloadManager"
     
-    override fun initialize() {
-        FlirSDKLoader.init(reactContext)
-    }
-    
     @ReactMethod
     fun isFlirAvailable(promise: Promise) {
         promise.resolve(FlirSDKLoader.isSDKAvailable(reactContext))
@@ -27,9 +23,14 @@ class FlirDownloadManager(private val reactContext: ReactApplicationContext) :
     }
     
     @ReactMethod
+    fun getDeviceArch(promise: Promise) {
+        promise.resolve(FlirSDKLoader.getDeviceArch())
+    }
+    
+    @ReactMethod
     fun downloadFlirSDK(promise: Promise) {
         downloadJob = scope.launch {
-            val result = FlirSDKLoader.downloadDirect(reactContext) { downloaded, total ->
+            val result = FlirSDKLoader.downloadSDK(reactContext) { downloaded, total ->
                 sendEvent("FlirDownloadProgress", Arguments.createMap().apply {
                     putDouble("bytesDownloaded", downloaded.toDouble())
                     putDouble("totalBytes", total.toDouble())
