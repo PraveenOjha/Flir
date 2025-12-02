@@ -1,25 +1,28 @@
 package flir.android
 
 import com.facebook.react.bridge.*
-import com.facebook.react.modules.core.DeviceEventManagerModule
-import kotlinx.coroutines.*
 
+/**
+ * FlirDownloadManager - React Native module for SDK status
+ * 
+ * Since the SDK is now bundled in the AAR, this module just reports
+ * that the SDK is always available.
+ */
 class FlirDownloadManager(private val reactContext: ReactApplicationContext) : 
     ReactContextBaseJavaModule(reactContext) {
-    
-    private var downloadJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     
     override fun getName() = "FlirDownloadManager"
     
     @ReactMethod
     fun isFlirAvailable(promise: Promise) {
-        promise.resolve(FlirSDKLoader.isSDKAvailable(reactContext))
+        // SDK is bundled - always available
+        promise.resolve(true)
     }
     
     @ReactMethod
     fun getDownloadSize(promise: Promise) {
-        promise.resolve(FlirSDKLoader.getDownloadSize(reactContext).toDouble())
+        // No download needed
+        promise.resolve(0.0)
     }
     
     @ReactMethod
@@ -29,48 +32,24 @@ class FlirDownloadManager(private val reactContext: ReactApplicationContext) :
     
     @ReactMethod
     fun downloadFlirSDK(promise: Promise) {
-        downloadJob = scope.launch {
-            val result = FlirSDKLoader.downloadSDK(reactContext) { downloaded, total ->
-                sendEvent("FlirDownloadProgress", Arguments.createMap().apply {
-                    putDouble("bytesDownloaded", downloaded.toDouble())
-                    putDouble("totalBytes", total.toDouble())
-                    putDouble("percent", (downloaded.toDouble() / total) * 100)
-                })
-            }
-            
-            result.fold(
-                onSuccess = {
-                    sendEvent("FlirDownloadComplete", Arguments.createMap())
-                    promise.resolve(true)
-                },
-                onFailure = { error ->
-                    sendEvent("FlirDownloadError", Arguments.createMap().apply {
-                        putString("error", error.message)
-                    })
-                    promise.reject("E_DOWNLOAD", error.message, error)
-                }
-            )
+        // SDK is bundled - no download needed
+        promise.resolve(true)
+    }
+    
+    @ReactMethod
+    fun getSDKStatus(promise: Promise) {
+        val status = Arguments.createMap().apply {
+            putBoolean("available", true)
+            putBoolean("bundled", true)
+            putString("arch", FlirSDKLoader.getDeviceArch())
+            putString("version", "4.16.0")
         }
+        promise.resolve(status)
     }
     
     @ReactMethod
-    fun cancelDownload() {
-        downloadJob?.cancel()
-    }
-    
-    @ReactMethod
-    fun deleteSDK(promise: Promise) {
-        promise.resolve(FlirSDKLoader.deleteSDK(reactContext))
-    }
-    
-    @ReactMethod
-    fun addListener(eventName: String) {}
-    
-    @ReactMethod
-    fun removeListeners(count: Int) {}
-    
-    private fun sendEvent(name: String, params: WritableMap) {
-        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-            .emit(name, params)
+    fun cancelDownload(promise: Promise) {
+        // Nothing to cancel
+        promise.resolve(true)
     }
 }

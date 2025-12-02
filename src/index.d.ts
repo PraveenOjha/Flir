@@ -13,5 +13,25 @@ export interface FlirDownloadAPI {
     delete(): Promise<boolean>;
 }
 
+export interface SDKStatus {
+    available: boolean;
+    arch: string;
+    dexPath: string;
+    nativeLibPath: string;
+    dexExists: boolean;
+    nativeLibsExist: boolean;
+}
+
+export interface FlirModuleAPI {
+    getTemperatureFromColor(color: number): Promise<number>;
+    getLatestFramePath(): Promise<string | null>;
+    getTemperatureAt(x: number, y: number): Promise<number>;
+    isEmulator(): Promise<boolean>;
+    isDeviceConnected(): Promise<boolean>;
+    getConnectedDeviceInfo(): Promise<string>;
+    isSDKDownloaded(): Promise<boolean>;
+    getSDKStatus(): Promise<SDKStatus>;
+}
+
 export declare const FlirDownload: FlirDownloadAPI;
-export declare const FlirModule: any;
+export declare const FlirModule: FlirModuleAPI;

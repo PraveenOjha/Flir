@@ -71,4 +71,36 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             promise.reject("ERR_FLIR_DEVICE_INFO", e)
         }
     }
+    
+    @ReactMethod
+    fun isSDKDownloaded(promise: Promise) {
+        try {
+            val available = FlirSDKLoader.isSDKAvailable(reactContext)
+            promise.resolve(available)
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_SDK_CHECK", e)
+        }
+    }
+    
+    @ReactMethod
+    fun getSDKStatus(promise: Promise) {
+        try {
+            val available = FlirSDKLoader.isSDKAvailable(reactContext)
+            val arch = FlirSDKLoader.getDeviceArch()
+            val dexPath = FlirSDKLoader.getDexPath(reactContext)
+            val nativeLibDir = FlirSDKLoader.getNativeLibDir(reactContext)
+            
+            val result = com.facebook.react.bridge.Arguments.createMap()
+            result.putBoolean("available", available)
+            result.putString("arch", arch)
+            result.putString("dexPath", dexPath?.absolutePath ?: "not downloaded")
+            result.putString("nativeLibPath", nativeLibDir?.absolutePath ?: "not downloaded")
+            result.putBoolean("dexExists", dexPath?.exists() == true)
+            result.putBoolean("nativeLibsExist", nativeLibDir?.exists() == true)
+            
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_SDK_STATUS", e)
+        }
+    }
 }
