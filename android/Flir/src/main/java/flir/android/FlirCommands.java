@@ -66,13 +66,6 @@ public final class FlirCommands {
                 return;
             }
 
-            // Update Var.flirEmulatorType so FlirHelper can use it
-            try {
-                ilabs.libs.io.data.Var.flirEmulatorType = type;
-            } catch (Throwable t) {
-                android.util.Log.w("CameraCommand", "[FLIR] Failed to set Var.flirEmulatorType: " + t.getMessage());
-            }
-
             // Get FlirManager instance and set emulator type
             FlirManager flirManager = FlirManager.INSTANCE;
             if (flirManager == null) {
