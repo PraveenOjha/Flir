@@ -123,6 +123,20 @@ object FlirManager {
             // Initialize SDK manager with listener matching FlirSdkManager.Listener interface
             sdkManager = FlirSdkManager(object : FlirSdkManager.Listener {
                 override fun onFrame(bitmap: Bitmap) {
+                    // Validate bitmap before processing to prevent GL crashes
+                    if (bitmap.isRecycled) {
+                        Log.w(TAG, "[FlirManager] onFrame: Received recycled bitmap, skipping")
+                        return
+                    }
+                    if (bitmap.width <= 0 || bitmap.height <= 0) {
+                        Log.w(TAG, "[FlirManager] onFrame: Invalid bitmap dimensions ${bitmap.width}x${bitmap.height}, skipping")
+                        return
+                    }
+                    if (bitmap.config == null) {
+                        Log.w(TAG, "[FlirManager] onFrame: Bitmap has null config, skipping")
+                        return
+                    }
+                    
                     latestBitmap = bitmap
                     if (frameCount == 0) {
                         Log.i(FLOW_TAG, "[FlirManager] FIRST FRAME received: ${bitmap.width}x${bitmap.height}")
@@ -421,10 +435,17 @@ object FlirManager {
     }
 
     fun setEmulatorMode(enabled: Boolean) {
+        Log.i(FLOW_TAG, "[FlirManager] setEmulatorMode($enabled) called")
         if (enabled) {
             isEmulatorMode = true
+            // Reset discovery state to allow fresh discovery
+            discoveryStarted = false
             discoveryCallback?.onEmulatorEnabled()
             startEmulator(preferredEmulatorType)
+        } else {
+            // Disable emulator - just stop, don't start new discovery
+            Log.i(FLOW_TAG, "[FlirManager] Disabling emulator mode, stopping...")
+            stop()
         }
     }
 

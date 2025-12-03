@@ -438,9 +438,21 @@ public class FlirSdkManager {
     private void handleCameraFound(DiscoveredCamera discoveredCamera) {
         Identity identity = discoveredCamera.getIdentity();
         String deviceId = identity.deviceId;
-        String deviceName = identity.toString();
         CommunicationInterface iface = identity.communicationInterface;
         boolean isEmulator = (iface == CommunicationInterface.EMULATOR);
+        
+        // Create a friendly device name instead of using identity.toString()
+        String deviceName;
+        if (isEmulator) {
+            // For emulators, show the emulator type we're targeting
+            deviceName = "FLIR " + emulatorType.name().replace("_", " ");
+        } else if (iface == CommunicationInterface.USB) {
+            deviceName = "FLIR ONE (USB)";
+        } else if (iface == CommunicationInterface.NETWORK || iface == CommunicationInterface.FLIR_ONE_WIRELESS) {
+            deviceName = "FLIR ONE Edge (WiFi)";
+        } else {
+            deviceName = "FLIR Camera";
+        }
         
         Log.i(TAG, "[FLIR] Camera found: " + deviceName + " (id=" + deviceId + ", iface=" + iface + ")");
         logStep("DEVICE_FOUND", "id=" + deviceId + ", name=" + deviceName + ", interface=" + iface);
