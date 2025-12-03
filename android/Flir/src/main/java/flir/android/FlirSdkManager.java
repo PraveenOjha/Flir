@@ -350,7 +350,7 @@ public class FlirSdkManager {
     // ==================== DISCOVERY ====================
     
     private void startFullDiscovery() {
-        Log.i(TAG, "[FLIR] Starting full discovery (USB, NETWORK, EMULATOR)");
+        Log.i(TAG, "[FLIR] Starting full discovery (USB, NETWORK, EMULATOR, FLIR_ONE_WIRELESS)");
         
         if (!initializeSdk()) {
             Log.w(TAG, "[FLIR] SDK not available, falling back to emulator");
@@ -369,7 +369,8 @@ public class FlirSdkManager {
             CommunicationInterface[] interfaces = {
                 CommunicationInterface.USB,
                 CommunicationInterface.NETWORK,
-                CommunicationInterface.EMULATOR
+                CommunicationInterface.EMULATOR,
+                CommunicationInterface.FLIR_ONE_WIRELESS
             };
             
             DiscoveryFactory.getInstance().scan(new DiscoveryEventListener() {
@@ -441,7 +442,7 @@ public class FlirSdkManager {
         CommunicationInterface iface = identity.communicationInterface;
         boolean isEmulator = (iface == CommunicationInterface.EMULATOR);
         
-        Log.i(TAG, "[FLIR] Camera found: " + deviceName + " (" + iface + ")");
+        Log.i(TAG, "[FLIR] Camera found: " + deviceName + " (id=" + deviceId + ", iface=" + iface + ")");
         logStep("DEVICE_FOUND", "id=" + deviceId + ", name=" + deviceName + ", interface=" + iface);
         
         CommInterface commIface;
@@ -450,6 +451,7 @@ public class FlirSdkManager {
                 commIface = CommInterface.USB;
                 break;
             case NETWORK:
+            case FLIR_ONE_WIRELESS:
                 commIface = CommInterface.NETWORK;
                 break;
             default:
@@ -477,11 +479,37 @@ public class FlirSdkManager {
                 }
             });
             
-            // Auto-connect to first device found
-            if (discoveredDevices.size() == 1 && !isConnected.get()) {
-                cancelDiscoveryTimeout();
-                logStep("AUTO_CONNECT", "Connecting to first found device");
-                connectToIdentity(deviceInfo);
+            // Auto-connect for emulator mode - use simple position-based selection
+            // Position 2 (index 1) = FLIR ONE, Position 3 (index 2) = FLIR ONE Edge
+            if (isEmulatorMode.get() && isEmulator && !isConnected.get()) {
+                // Count how many emulators we've found so far
+                int emulatorCount = 0;
+                for (DeviceInfo d : discoveredDevices) {
+                    if (d.isEmulator) emulatorCount++;
+                }
+                
+                Log.i(TAG, "[FLIR] Emulator discovered at position " + emulatorCount + 
+                      ": deviceId=" + deviceId + ", deviceName=" + deviceName +
+                      ", targetType=" + emulatorType);
+                
+                boolean shouldConnect = false;
+                
+                // Simple position-based selection:
+                // FLIR_ONE = 2nd emulator in list (position 2)
+                // FLIR_ONE_EDGE = 3rd emulator in list (position 3)
+                if (emulatorType == EmulatorType.FLIR_ONE && emulatorCount == 2) {
+                    shouldConnect = true;
+                    Log.i(TAG, "[FLIR] Connecting to FLIR ONE (position 2)");
+                } else if (emulatorType == EmulatorType.FLIR_ONE_EDGE && emulatorCount == 3) {
+                    shouldConnect = true;
+                    Log.i(TAG, "[FLIR] Connecting to FLIR ONE Edge (position 3)");
+                }
+                
+                if (shouldConnect) {
+                    cancelDiscoveryTimeout();
+                    logStep("AUTO_CONNECT_EMULATOR", "Connecting to " + emulatorType + " emulator: " + deviceName);
+                    connectToIdentity(deviceInfo);
+                }
             }
         }
     }

@@ -279,6 +279,12 @@ object FlirManager {
         sdkManager?.startDiscovery(true) // forceEmulator = true
     }
 
+    fun stopDiscovery() {
+        Log.i(TAG, "Stopping discovery")
+        discoveryStarted = false
+        sdkManager?.stopDiscovery()
+    }
+
     fun stop() {
         Log.i(TAG, "Stopping FlirManager")
         

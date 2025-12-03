@@ -25,6 +25,20 @@
     <!-- Required by ACE SDK architecture for local network communication -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- ============================================ -->
+    <!-- WiFi permissions for network discovery      -->
+    <!-- Required for FLIR ONE Edge and network cams -->
+    <!-- ============================================ -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    
+    <!-- Location permission required for WiFi scanning on Android 10+ -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
     <!-- Note: USB permissions are handled at runtime via UsbPermissionHandler -->
     <!-- No additional USB permissions needed in manifest -->
 

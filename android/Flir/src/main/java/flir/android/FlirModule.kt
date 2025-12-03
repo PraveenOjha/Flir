@@ -103,4 +103,76 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             promise.reject("ERR_FLIR_SDK_STATUS", e)
         }
     }
+    
+    @ReactMethod
+    fun getDiscoveredDevices(promise: Promise) {
+        try {
+            val devices = FlirManager.getDiscoveredDevices()
+            val result = com.facebook.react.bridge.Arguments.createArray()
+            
+            devices.forEach { device ->
+                val deviceMap = com.facebook.react.bridge.Arguments.createMap()
+                deviceMap.putString("id", device.deviceId)
+                deviceMap.putString("name", device.deviceName)
+                deviceMap.putString("communicationType", device.commInterface.name)
+                deviceMap.putBoolean("isEmulator", device.isEmulator)
+                result.pushMap(deviceMap)
+            }
+            
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_DEVICES", e)
+        }
+    }
+    
+    @ReactMethod
+    fun startEmulator(emulatorType: String, promise: Promise) {
+        try {
+            FlirManager.setPreferredEmulatorType(emulatorType)
+            FlirManager.forceEmulatorMode(emulatorType)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_EMULATOR", e)
+        }
+    }
+    
+    @ReactMethod
+    fun connectToDevice(deviceId: String, promise: Promise) {
+        try {
+            FlirManager.switchToDevice(deviceId)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_CONNECT", e)
+        }
+    }
+    
+    @ReactMethod
+    fun startDiscovery(promise: Promise) {
+        try {
+            FlirManager.startDiscovery(true)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_DISCOVERY", e)
+        }
+    }
+    
+    @ReactMethod
+    fun stopDiscovery(promise: Promise) {
+        try {
+            FlirManager.stopDiscovery()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_STOP_DISCOVERY", e)
+        }
+    }
+    
+    @ReactMethod
+    fun stopFlir(promise: Promise) {
+        try {
+            FlirManager.stop()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_STOP", e)
+        }
+    }
 }
