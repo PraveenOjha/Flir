@@ -74,8 +74,102 @@ public class FlirSdkManager {
         void onDeviceDisconnected();
         void onDiscoveryStarted();
         void onDiscoveryTimeout();
+        void onNoDeviceFound(); // Called when discovery times out with no real device - RN should enable EMU button
         void onStreamStarted(String streamType);
         void onError(String error);
+    }
+    
+    // Correct emulator device IDs from FLIR SDK - ONLY these two are allowed
+    private static final String EMULATOR_DEVICE_ID_FLIR_ONE = "EMULATED FLIR ONE";
+    private static final String EMULATOR_DEVICE_ID_FLIR_ONE_EDGE = "EMULATED F1 EDGE PRO";
+    
+    // Known C++ emulator device IDs to block
+    private static final String CPP_EMULATOR_ID = "C++ Emulator";
+    
+    /**
+     * Check if a device ID is a VALID emulator (FLIR ONE or FLIR ONE Edge only).
+     * Returns true ONLY for "EMULATED FLIR ONE" or "EMULATED F1 EDGE PRO".
+     */
+    private static boolean isValidEmulator(String deviceId) {
+        if (deviceId == null) return false;
+        return EMULATOR_DEVICE_ID_FLIR_ONE.equals(deviceId) || 
+               EMULATOR_DEVICE_ID_FLIR_ONE_EDGE.equals(deviceId);
+    }
+    
+    /**
+     * Check if a device is the C++ emulator or any invalid/unwanted emulator.
+     * Returns true for ANY emulator that is NOT our two valid ones.
+     * Uses contains() checks for maximum detection coverage.
+     */
+    private static boolean isCppEmulator(String deviceId) {
+        if (deviceId == null) return false;
+        
+        // If it's a valid emulator (EMULATED FLIR ONE or EMULATED F1 EDGE PRO), allow it
+        if (isValidEmulator(deviceId)) {
+            return false;
+        }
+        
+        String idLower = deviceId.toLowerCase();
+        
+        // Block known C++ emulator ID "65" (contains check)
+        if (idLower.contains("65") || deviceId.equals(CPP_EMULATOR_ID)) {
+            return true;
+        }
+        
+        // Block pure numeric device IDs (likely internal/test emulators)
+        if (deviceId.matches("^\\d+$")) {
+            return true;
+        }
+        
+        // Block anything containing c++ or cpp
+        if (idLower.contains("c++") || idLower.contains("cpp")) {
+            return true;
+        }
+        
+        // Block anything containing "emulate" or "emulator" that isn't our valid emulators
+        if (idLower.contains("emulate") || idLower.contains("emulator")) {
+            return true;
+        }
+        
+        // Block any short numeric-looking IDs (1-3 digits often indicate internal test devices)
+        if (deviceId.matches("^\\d{1,3}$")) {
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Check if a device is an emulator by checking device ID or name.
+     * Returns true if deviceId or deviceName contains "emulate" or "emulator" (case-insensitive).
+     */
+    private static boolean isEmulatorDevice(String deviceId, String deviceName) {
+        if (deviceId != null) {
+            String idLower = deviceId.toLowerCase();
+            if (idLower.contains("emulate") || idLower.contains("emulator")) {
+                return true;
+            }
+        }
+        if (deviceName != null) {
+            String nameLower = deviceName.toLowerCase();
+            if (nameLower.contains("emulate") || nameLower.contains("emulator")) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    /**
+     * Count real (non-emulator) devices in the discovered list.
+     */
+    private int countRealDevices() {
+        int count = 0;
+        for (DeviceInfo d : discoveredDevices) {
+            if (!isEmulatorDevice(d.deviceId, d.deviceName) && !d.isEmulator) {
+                count++;
+            }
+        }
+        return count;
     }
     
     // Device info class
@@ -109,6 +203,7 @@ public class FlirSdkManager {
     // State tracking
     private final AtomicBoolean isDiscovering = new AtomicBoolean(false);
     private final AtomicBoolean isConnected = new AtomicBoolean(false);
+    private final AtomicBoolean isConnecting = new AtomicBoolean(false); // Prevent duplicate connection attempts
     private final AtomicBoolean isStreaming = new AtomicBoolean(false);
     private final AtomicBoolean isEmulatorMode = new AtomicBoolean(false);
     private final CopyOnWriteArrayList<DeviceInfo> discoveredDevices = new CopyOnWriteArrayList<>();
@@ -240,7 +335,7 @@ public class FlirSdkManager {
     }
     
     public void disconnect() {
-        Log.i(TAG, "[FLIR] disconnect()");
+        Log.i(TAG, "[FLIR] 🔌 disconnect()");
         
         stopStreaming();
         
@@ -254,6 +349,7 @@ public class FlirSdkManager {
         }
         
         isConnected.set(false);
+        isConnecting.set(false); // Reset connecting flag on disconnect
         connectedDevice = null;
         
         mainHandler.post(() -> {
@@ -439,13 +535,17 @@ public class FlirSdkManager {
         Identity identity = discoveredCamera.getIdentity();
         String deviceId = identity.deviceId;
         CommunicationInterface iface = identity.communicationInterface;
-        boolean isEmulator = (iface == CommunicationInterface.EMULATOR);
+        boolean isEmulatorInterface = (iface == CommunicationInterface.EMULATOR);
+        
+        // Also check device ID/name for "emulate" or "emulator" keywords
+        boolean isEmulatorByName = isEmulatorDevice(deviceId, null);
+        boolean isEmulator = isEmulatorInterface || isEmulatorByName;
         
         // Create a friendly device name instead of using identity.toString()
         String deviceName;
         if (isEmulator) {
-            // For emulators, show the emulator type we're targeting
-            deviceName = "FLIR " + emulatorType.name().replace("_", " ");
+            // For emulators, use the device ID as name for clarity
+            deviceName = deviceId; // e.g., "EMULATED FLIR ONE" or "EMULATED F1 EDGE PRO"
         } else if (iface == CommunicationInterface.USB) {
             deviceName = "FLIR ONE (USB)";
         } else if (iface == CommunicationInterface.NETWORK || iface == CommunicationInterface.FLIR_ONE_WIRELESS) {
@@ -454,8 +554,17 @@ public class FlirSdkManager {
             deviceName = "FLIR Camera";
         }
         
-        Log.i(TAG, "[FLIR] Camera found: " + deviceName + " (id=" + deviceId + ", iface=" + iface + ")");
-        logStep("DEVICE_FOUND", "id=" + deviceId + ", name=" + deviceName + ", interface=" + iface);
+        // Enhanced logging for all discovered FLIR devices
+        Log.i(TAG, "==================== FLIR DEVICE DISCOVERED ====================");
+        Log.i(TAG, "[FLIR] Device ID: " + deviceId);
+        Log.i(TAG, "[FLIR] Device Name: " + deviceName);
+        Log.i(TAG, "[FLIR] Interface: " + iface);
+        Log.i(TAG, "[FLIR] Is Emulator (interface): " + isEmulatorInterface);
+        Log.i(TAG, "[FLIR] Is Emulator (by name/id): " + isEmulatorByName);
+        Log.i(TAG, "[FLIR] Is Emulator (final): " + isEmulator);
+        Log.i(TAG, "[FLIR] Total discovered so far: " + (discoveredDevices.size() + 1));
+        Log.i(TAG, "================================================================");
+        logStep("DEVICE_FOUND", "id=" + deviceId + ", name=" + deviceName + ", interface=" + iface + ", isEmulator=" + isEmulator);
         
         CommInterface commIface;
         switch (iface) {
@@ -484,6 +593,14 @@ public class FlirSdkManager {
         if (!exists) {
             discoveredDevices.add(deviceInfo);
             
+            // Log all discovered devices so far
+            Log.i(TAG, "[FLIR] 📋 All discovered devices (" + discoveredDevices.size() + " total):");
+            int idx = 0;
+            for (DeviceInfo d : discoveredDevices) {
+                idx++;
+                Log.i(TAG, "[FLIR]   " + idx + ". " + d.deviceName + " (id=" + d.deviceId + ", emu=" + d.isEmulator + ", iface=" + d.commInterface + ")");
+            }
+            
             mainHandler.post(() -> {
                 if (listener != null) {
                     listener.onDeviceFound(deviceId, deviceName, isEmulator);
@@ -491,38 +608,32 @@ public class FlirSdkManager {
                 }
             });
             
-            // Auto-connect for emulator mode - use simple position-based selection
-            // Position 2 (index 1) = FLIR ONE, Position 3 (index 2) = FLIR ONE Edge
-            if (isEmulatorMode.get() && isEmulator && !isConnected.get()) {
-                // Count how many emulators we've found so far
-                int emulatorCount = 0;
-                for (DeviceInfo d : discoveredDevices) {
-                    if (d.isEmulator) emulatorCount++;
-                }
-                
-                Log.i(TAG, "[FLIR] Emulator discovered at position " + emulatorCount + 
-                      ": deviceId=" + deviceId + ", deviceName=" + deviceName +
-                      ", targetType=" + emulatorType);
-                
-                boolean shouldConnect = false;
-                
-                // Simple position-based selection:
-                // FLIR_ONE = 2nd emulator in list (position 2)
-                // FLIR_ONE_EDGE = 3rd emulator in list (position 3)
-                if (emulatorType == EmulatorType.FLIR_ONE && emulatorCount == 2) {
-                    shouldConnect = true;
-                    Log.i(TAG, "[FLIR] Connecting to FLIR ONE (position 2)");
-                } else if (emulatorType == EmulatorType.FLIR_ONE_EDGE && emulatorCount == 3) {
-                    shouldConnect = true;
-                    Log.i(TAG, "[FLIR] Connecting to FLIR ONE Edge (position 3)");
-                }
-                
-                if (shouldConnect) {
-                    cancelDiscoveryTimeout();
-                    logStep("AUTO_CONNECT_EMULATOR", "Connecting to " + emulatorType + " emulator: " + deviceName);
-                    connectToIdentity(deviceInfo);
-                }
+            // === AUTO-CONNECT LOGIC ===
+            // Rule 0: NEVER connect to C++ emulator or any invalid emulator
+            // Rule 1: During NORMAL discovery (isEmulatorMode=false): 
+            //         - Auto-connect to REAL devices only
+            //         - NEVER auto-connect to any emulator devices
+            // Rule 2: During EXPLICIT emulator mode (isEmulatorMode=true via user EMU button):
+            //         - Auto-connect ONLY to valid emulators: "EMULATED FLIR ONE" or "EMULATED F1 EDGE PRO"
+            //         - NEVER connect to C++ emulator
+            
+            // BLOCK C++ emulator and any invalid emulator - NEVER connect to these
+            if (isCppEmulator(deviceId) || (isEmulator && !isValidEmulator(deviceId))) {
+                Log.w(TAG, "[FLIR] 🚫 BLOCKING invalid/C++ emulator: '" + deviceId + "' - only FLIR ONE and FLIR ONE Edge emulators are supported");
+                return; // Exit early - do not process this device at all
             }
+            
+            // === AUTO-CONNECT COMPLETELY DISABLED ===
+            // ALL devices (real and emulator) must be manually selected from the Settings modal.
+            // Discovery only populates the device list, no automatic connections ever.
+            // User must go to Settings > FLIR > Device Selection to choose and connect.
+            
+            if (isEmulator) {
+                Log.i(TAG, "[FLIR] 🎮 Emulator discovered (NO auto-connect): deviceId='" + deviceId + "' - user must select from Settings");
+            } else {
+                Log.i(TAG, "[FLIR] 📱 Real device discovered (NO auto-connect): deviceId='" + deviceId + "' - user must select from Settings");
+            }
+            // NO connectToIdentity() call - user must manually select from Settings
         }
     }
     
@@ -531,7 +642,13 @@ public class FlirSdkManager {
         
         discoveryTimeoutFuture = scheduler.schedule(() -> {
             Log.i(TAG, "[FLIR] Discovery timeout after " + timeoutMs + "ms");
-            logStep("DISCOVERY_TIMEOUT", "timeout=" + timeoutMs + "ms, devicesFound=" + discoveredDevices.size());
+            
+            // Count real (non-emulator) devices
+            int realDeviceCount = countRealDevices();
+            int totalDevices = discoveredDevices.size();
+            
+            Log.i(TAG, "[FLIR] 📊 Discovery stats: total=" + totalDevices + ", realDevices=" + realDeviceCount + ", emulators=" + (totalDevices - realDeviceCount));
+            logStep("DISCOVERY_TIMEOUT", "timeout=" + timeoutMs + "ms, totalDevices=" + totalDevices + ", realDevices=" + realDeviceCount);
             
             isDiscovering.set(false);
             stopDiscovery();
@@ -542,10 +659,17 @@ public class FlirSdkManager {
                 }
             });
             
-            // If no devices found, try emulator
-            if (discoveredDevices.isEmpty() && !isEmulatorMode.get()) {
-                logStep("FALLBACK_EMULATOR", "No devices found, trying emulator");
-                startEmulatorDiscovery();
+            // If NO REAL devices found (only emulators or empty) and NOT in emulator mode, notify RN to enable EMU button
+            // This treats "only emulator devices found" as "no device found"
+            // Do NOT auto-start emulator - let user enable it manually
+            if (realDeviceCount == 0 && !isEmulatorMode.get()) {
+                Log.i(TAG, "[FLIR] ⚠️ No REAL FLIR device found (emulators don't count) - notifying RN to enable EMU button");
+                logStep("NO_DEVICE_FOUND", "realDevices=0, notifying RN to show EMU option");
+                mainHandler.post(() -> {
+                    if (listener != null) {
+                        listener.onNoDeviceFound();
+                    }
+                });
             }
         }, timeoutMs, TimeUnit.MILLISECONDS);
     }
@@ -559,9 +683,51 @@ public class FlirSdkManager {
     
     // ==================== CONNECTION ====================
     
+    /**
+     * Find a device by its ID from the discovered devices list.
+     * @param deviceId The device ID to search for
+     * @return The DeviceInfo if found, null otherwise
+     */
+    public DeviceInfo findDeviceById(String deviceId) {
+        if (deviceId == null) return null;
+        for (DeviceInfo d : discoveredDevices) {
+            if (deviceId.equals(d.deviceId)) {
+                return d;
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Connect to a specific device by its ID.
+     * @param deviceId The device ID to connect to
+     * @return true if connection was initiated, false if device not found
+     */
+    public boolean connectToDeviceById(String deviceId) {
+        DeviceInfo device = findDeviceById(deviceId);
+        if (device == null) {
+            Log.e(TAG, "[FLIR] ❌ Cannot connect: Device not found with ID: " + deviceId);
+            return false;
+        }
+        Log.i(TAG, "[FLIR] 🎯 Connecting to device by ID: " + deviceId + " (name=" + device.deviceName + ")");
+        connectToIdentity(device);
+        return true;
+    }
+    
     private void connectToIdentity(DeviceInfo device) {
+        // Prevent duplicate connection attempts
+        if (isConnecting.get()) {
+            Log.w(TAG, "[FLIR] ⚠️ Connection already in progress, ignoring duplicate request for: " + device.deviceName);
+            return;
+        }
+        if (isConnected.get()) {
+            Log.w(TAG, "[FLIR] ⚠️ Already connected to a device, ignoring request for: " + device.deviceName);
+            return;
+        }
+        
+        isConnecting.set(true);
         logStep("CONNECT_START", "device=" + device.deviceName);
-        Log.i(TAG, "[FLIR] Connecting to: " + device.deviceName);
+        Log.i(TAG, "[FLIR] 🔌 Connecting to: " + device.deviceName);
         
         scheduler.execute(() -> {
             try {
@@ -591,10 +757,11 @@ public class FlirSdkManager {
                 );
                 
                 // If we get here, connection succeeded
-                Log.i(TAG, "[FLIR] Connected to: " + device.deviceName);
+                Log.i(TAG, "[FLIR] ✅ Connected to: " + device.deviceName);
                 logStep("CONNECTED", "device=" + device.deviceName);
                 
                 isConnected.set(true);
+                isConnecting.set(false); // Connection complete
                 connectedDevice = device;
                 
                 mainHandler.post(() -> {
@@ -607,8 +774,9 @@ public class FlirSdkManager {
                 startStreaming();
                 
             } catch (Throwable t) {
-                Log.e(TAG, "[FLIR] Connect error: " + t.getMessage(), t);
+                Log.e(TAG, "[FLIR] ❌ Connect error: " + t.getMessage(), t);
                 isConnected.set(false);
+                isConnecting.set(false); // Connection attempt finished
                 camera = null;
                 notifyError("Connect error: " + t.getMessage());
             }

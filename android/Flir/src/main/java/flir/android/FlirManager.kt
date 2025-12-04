@@ -205,9 +205,15 @@ object FlirManager {
                 }
                 
                 override fun onDiscoveryTimeout() {
-                    Log.w(TAG, "Discovery timeout - no devices found")
+                    Log.w(TAG, "Discovery timeout")
                     discoveryCallback?.onDiscoveryTimeout()
                     emitDeviceState("discovery_timeout", false)
+                }
+                
+                override fun onNoDeviceFound() {
+                    Log.w(TAG, "⚠️ No FLIR device found - RN should enable EMU button")
+                    // Emit event to React Native so it can enable the EMU button
+                    emitDeviceState("no_device_found", false)
                 }
                 
                 override fun onStreamStarted(streamType: String) {
