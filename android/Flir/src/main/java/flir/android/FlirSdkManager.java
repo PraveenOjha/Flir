@@ -22,7 +22,6 @@ import com.flir.thermalsdk.live.discovery.DiscoveredCamera;
 import com.flir.thermalsdk.live.discovery.DiscoveryEventListener;
 import com.flir.thermalsdk.live.discovery.DiscoveryFactory;
 import com.flir.thermalsdk.live.remote.OnReceived;
-import com.flir.thermalsdk.live.remote.OnRemoteError;
 import com.flir.thermalsdk.live.streaming.Stream;
 import com.flir.thermalsdk.live.streaming.ThermalStreamer;
 
@@ -44,7 +43,14 @@ public class FlirSdkManager {
     
     // Core components
     private final Context context;
-    private final Executor executor = Executors.newCachedThreadPool();
+    // Use bounded thread pool to prevent thread explosion during rapid frame processing
+    private final Executor executor = Executors.newFixedThreadPool(2);
+    // Single-threaded executor for frame processing to ensure ordered processing
+    private final Executor frameExecutor = Executors.newSingleThreadExecutor();
+    // Frame processing guard - skip frames if still processing previous one
+    private volatile boolean isProcessingFrame = false;
+    private long lastFrameProcessedMs = 0;
+    private static final long MIN_FRAME_INTERVAL_MS = 50; // Max ~20 FPS frame processing
     
     // State
     private boolean isInitialized = false;
@@ -52,14 +58,7 @@ public class FlirSdkManager {
     private Camera camera;
     private ThermalStreamer streamer;
     private Stream activeStream;
-    private ThermalImage lastThermalImage;
     private final List<Identity> discoveredDevices = Collections.synchronizedList(new ArrayList<>());
-    
-    // Temperature data storage - store actual values since ThermalImage reference may not persist
-    private double[][] temperatureGrid = null;
-    private int thermalWidth = 0;
-    private int thermalHeight = 0;
-    private final Object temperatureLock = new Object();
     
     // Listener
     private Listener listener;
@@ -289,52 +288,22 @@ public class FlirSdkManager {
                 // Start receiving frames using OnReceived and OnRemoteError
                 thermalStream.start(
                     (OnReceived<Void>) v -> {
-                        executor.execute(() -> {
+                        // FRAME DROP GUARD: Skip frame if still processing previous one
+                        // This prevents thread buildup and ensures smooth frame flow
+                        long now = System.currentTimeMillis();
+                        if (isProcessingFrame || (now - lastFrameProcessedMs < MIN_FRAME_INTERVAL_MS)) {
+                            // Drop frame - processing is behind or too soon since last frame
+                            return;
+                        }
+                        
+                        // Mark processing start before queuing task
+                        isProcessingFrame = true;
+                        
+                        // Use single-threaded frameExecutor to ensure ordered frame processing
+                        frameExecutor.execute(() -> {
                             try {
                                 if (streamer != null) {
                                     streamer.update();
-                                    
-                                    // Extract temperature data inside the callback where ThermalImage is valid
-                                    streamer.withThermalImage(thermalImage -> {
-                                        lastThermalImage = thermalImage;
-                                        
-                                        // Cache temperature grid for queries outside callback
-                                        try {
-                                            int width = thermalImage.getWidth();
-                                            int height = thermalImage.getHeight();
-                                            
-                                            synchronized (temperatureLock) {
-                                                // Only reallocate if size changed
-                                                if (temperatureGrid == null || thermalWidth != width || thermalHeight != height) {
-                                                    temperatureGrid = new double[height][width];
-                                                    thermalWidth = width;
-                                                    thermalHeight = height;
-                                                    Log.d(TAG, "Temperature grid allocated: " + width + "x" + height);
-                                                }
-                                                
-                                                // Sample key points for temperature (full grid is expensive)
-                                                // Store center point and last queried region
-                                                int cx = width / 2;
-                                                int cy = height / 2;
-                                                
-                                                // Update center region (3x3 around center)
-                                                for (int dy = -1; dy <= 1; dy++) {
-                                                    for (int dx = -1; dx <= 1; dx++) {
-                                                        int px = Math.max(0, Math.min(width - 1, cx + dx));
-                                                        int py = Math.max(0, Math.min(height - 1, cy + dy));
-                                                        try {
-                                                            ThermalValue val = thermalImage.getValueAt(new Point(px, py));
-                                                            if (val != null) {
-                                                                temperatureGrid[py][px] = val.asCelsius().value;
-                                                            }
-                                                        } catch (Exception ignored) {}
-                                                    }
-                                                }
-                                            }
-                                        } catch (Exception e) {
-                                            Log.w(TAG, "Error caching temperature grid", e);
-                                        }
-                                    });
                                     
                                     // Get ImageBuffer and convert to Bitmap
                                     ImageBuffer imageBuffer = streamer.getImage();
@@ -348,6 +317,10 @@ public class FlirSdkManager {
                                 }
                             } catch (Exception e) {
                                 Log.e(TAG, "Error processing frame", e);
+                            } finally {
+                                // Reset frame processing guard to allow next frame
+                                lastFrameProcessedMs = System.currentTimeMillis();
+                                isProcessingFrame = false;
                             }
                         });
                     },
@@ -380,94 +353,49 @@ public class FlirSdkManager {
         }
         
         streamer = null;
-        lastThermalImage = null;
+        
+        // Reset frame processing state
+        isProcessingFrame = false;
+        lastFrameProcessedMs = 0;
         
         Log.d(TAG, "Streaming stopped");
-        
-        // Clear temperature cache
-        synchronized (temperatureLock) {
-            temperatureGrid = null;
-            thermalWidth = 0;
-            thermalHeight = 0;
-        }
     }
     
     /**
      * Get temperature at a specific point in the image
-     * Uses cached temperature grid that's populated during frame callbacks
+     * Queries the SDK directly - simple and no locks needed
      * @param x X coordinate (0 to image width-1)
      * @param y Y coordinate (0 to image height-1)
      * @return Temperature in Celsius, or Double.NaN if not available
      */
     public double getTemperatureAt(int x, int y) {
-        // First try to query via streamer callback (most accurate)
-        if (streamer != null) {
-            final double[] result = {Double.NaN};
-            try {
-                streamer.withThermalImage(thermalImage -> {
-                    try {
-                        // Clamp coordinates to thermal image bounds
-                        int imgWidth = thermalImage.getWidth();
-                        int imgHeight = thermalImage.getHeight();
-                        
-                        int clampedX = Math.max(0, Math.min(imgWidth - 1, x));
-                        int clampedY = Math.max(0, Math.min(imgHeight - 1, y));
-                        
-                        Point point = new Point(clampedX, clampedY);
-                        ThermalValue value = thermalImage.getValueAt(point);
-                        
-                        if (value != null) {
-                            result[0] = value.asCelsius().value;
-                            
-                            // Also cache in grid for future use
-                            synchronized (temperatureLock) {
-                                if (temperatureGrid != null && clampedY < thermalHeight && clampedX < thermalWidth) {
-                                    temperatureGrid[clampedY][clampedX] = result[0];
-                                }
-                            }
-                        }
-                    } catch (Exception e) {
-                        Log.w(TAG, "Error in withThermalImage temperature query", e);
+        if (streamer == null) {
+            return Double.NaN;
+        }
+        
+        final double[] result = {Double.NaN};
+        try {
+            streamer.withThermalImage(thermalImage -> {
+                try {
+                    int imgWidth = thermalImage.getWidth();
+                    int imgHeight = thermalImage.getHeight();
+                    
+                    int clampedX = Math.max(0, Math.min(imgWidth - 1, x));
+                    int clampedY = Math.max(0, Math.min(imgHeight - 1, y));
+                    
+                    ThermalValue value = thermalImage.getValueAt(new Point(clampedX, clampedY));
+                    if (value != null) {
+                        result[0] = value.asCelsius().value;
                     }
-                });
-                
-                if (!Double.isNaN(result[0])) {
-                    return result[0];
+                } catch (Exception e) {
+                    Log.w(TAG, "Error querying temperature", e);
                 }
-            } catch (Exception e) {
-                Log.w(TAG, "Streamer temperature query failed, using cache", e);
-            }
+            });
+        } catch (Exception e) {
+            Log.w(TAG, "Temperature query failed", e);
         }
         
-        // Fallback: check cached grid
-        synchronized (temperatureLock) {
-            if (temperatureGrid != null && thermalWidth > 0 && thermalHeight > 0) {
-                int clampedX = Math.max(0, Math.min(thermalWidth - 1, x));
-                int clampedY = Math.max(0, Math.min(thermalHeight - 1, y));
-                double cachedTemp = temperatureGrid[clampedY][clampedX];
-                if (cachedTemp != 0.0) {
-                    return cachedTemp;
-                }
-            }
-        }
-        
-        Log.w(TAG, "No temperature data available for point (" + x + ", " + y + ")");
-        return Double.NaN;
-    }
-    
-    /**
-     * Get thermal image dimensions
-     */
-    public int getThermalWidth() {
-        synchronized (temperatureLock) {
-            return thermalWidth;
-        }
-    }
-    
-    public int getThermalHeight() {
-        synchronized (temperatureLock) {
-            return thermalHeight;
-        }
+        return result[0];
     }
     
     /**
@@ -477,37 +405,36 @@ public class FlirSdkManager {
      * @return Temperature in Celsius, or Double.NaN if not available
      */
     public double getTemperatureAtNormalized(double normalizedX, double normalizedY) {
-        int width, height;
-        
-        // Get dimensions from cache (thread-safe)
-        synchronized (temperatureLock) {
-            width = thermalWidth;
-            height = thermalHeight;
+        if (streamer == null) {
+            return Double.NaN;
         }
         
-        if (width <= 0 || height <= 0) {
-            // Try to get from streamer
-            if (streamer != null) {
-                final int[] dims = {0, 0};
+        final double[] result = {Double.NaN};
+        try {
+            streamer.withThermalImage(thermalImage -> {
                 try {
-                    streamer.withThermalImage(thermalImage -> {
-                        dims[0] = thermalImage.getWidth();
-                        dims[1] = thermalImage.getHeight();
-                    });
-                    width = dims[0];
-                    height = dims[1];
-                } catch (Exception ignored) {}
-            }
-            
-            if (width <= 0 || height <= 0) {
-                return Double.NaN;
-            }
+                    int width = thermalImage.getWidth();
+                    int height = thermalImage.getHeight();
+                    
+                    int x = (int) (normalizedX * (width - 1));
+                    int y = (int) (normalizedY * (height - 1));
+                    
+                    x = Math.max(0, Math.min(width - 1, x));
+                    y = Math.max(0, Math.min(height - 1, y));
+                    
+                    ThermalValue value = thermalImage.getValueAt(new Point(x, y));
+                    if (value != null) {
+                        result[0] = value.asCelsius().value;
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "Error querying temperature (normalized)", e);
+                }
+            });
+        } catch (Exception e) {
+            Log.w(TAG, "Temperature query failed", e);
         }
         
-        int x = (int) (normalizedX * (width - 1));
-        int y = (int) (normalizedY * (height - 1));
-        
-        return getTemperatureAt(x, y);
+        return result[0];
     }
     
     /**
