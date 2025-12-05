@@ -1,12 +1,35 @@
 package flir.android
 
+import android.util.Log
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.modules.core.DeviceEventManagerModule
 
 class FlirModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+    
+    companion object {
+        private const val TAG = "FlirModule"
+    }
+    
     override fun getName(): String = "FlirModule"
+    
+    // Required for RN event emitter support
+    private var listenerCount = 0
+    
+    @ReactMethod
+    fun addListener(eventName: String) {
+        listenerCount++
+        Log.d(TAG, "addListener: $eventName (count: $listenerCount)")
+    }
+    
+    @ReactMethod
+    fun removeListeners(count: Int) {
+        listenerCount -= count
+        if (listenerCount < 0) listenerCount = 0
+        Log.d(TAG, "removeListeners: $count (remaining: $listenerCount)")
+    }
 
     // Simple placeholder conversion: converts an ARGB color to a pseudo-temperature value.
     // Replace with SDK call when integrating thermalsdk APIs.
@@ -110,12 +133,12 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             val devices = FlirManager.getDiscoveredDevices()
             val result = com.facebook.react.bridge.Arguments.createArray()
             
-            devices.forEach { device ->
+            devices.forEach { identity ->
                 val deviceMap = com.facebook.react.bridge.Arguments.createMap()
-                deviceMap.putString("id", device.deviceId)
-                deviceMap.putString("name", device.deviceName)
-                deviceMap.putString("communicationType", device.commInterface.name)
-                deviceMap.putBoolean("isEmulator", device.isEmulator)
+                deviceMap.putString("id", identity.deviceId)
+                deviceMap.putString("name", identity.deviceId)
+                deviceMap.putString("communicationType", identity.communicationInterface.name)
+                deviceMap.putBoolean("isEmulator", identity.communicationInterface.name == "EMULATOR")
                 result.pushMap(deviceMap)
             }
             
@@ -128,8 +151,10 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     @ReactMethod
     fun startEmulator(emulatorType: String, promise: Promise) {
         try {
-            FlirManager.setPreferredEmulatorType(emulatorType)
-            FlirManager.forceEmulatorMode(emulatorType)
+            // Ensure SDK is initialized with context before starting discovery
+            FlirManager.init(reactContext)
+            // With simplified API, just start discovery - emulators are discovered like any device
+            FlirManager.startDiscovery(true)
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("ERR_FLIR_EMULATOR", e)
@@ -139,7 +164,9 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     @ReactMethod
     fun connectToDevice(deviceId: String, promise: Promise) {
         try {
-            FlirManager.switchToDevice(deviceId)
+            // Ensure SDK is initialized with context before connecting
+            FlirManager.init(reactContext)
+            FlirManager.connectToDevice(deviceId)
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("ERR_FLIR_CONNECT", e)
@@ -149,6 +176,8 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     @ReactMethod
     fun startDiscovery(promise: Promise) {
         try {
+            // Ensure SDK is initialized with context before starting discovery
+            FlirManager.init(reactContext)
             FlirManager.startDiscovery(true)
             promise.resolve(true)
         } catch (e: Exception) {
@@ -173,6 +202,56 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("ERR_FLIR_STOP", e)
+        }
+    }
+    
+    @ReactMethod
+    fun initializeSDK(promise: Promise) {
+        try {
+            FlirManager.init(reactContext)
+            
+            val result = com.facebook.react.bridge.Arguments.createMap()
+            result.putBoolean("initialized", true)
+            result.putString("message", "SDK initialized successfully")
+            promise.resolve(result)
+        } catch (e: Exception) {
+            val result = com.facebook.react.bridge.Arguments.createMap()
+            result.putBoolean("initialized", false)
+            result.putString("error", e.message ?: "Unknown error")
+            result.putString("errorType", e.javaClass.simpleName)
+            promise.resolve(result)
+        }
+    }
+    
+    @ReactMethod
+    fun getDebugInfo(promise: Promise) {
+        try {
+            val result = com.facebook.react.bridge.Arguments.createMap()
+            
+            // SDK availability
+            result.putBoolean("sdkAvailable", FlirSDKLoader.isSDKAvailable(reactContext))
+            result.putString("arch", FlirSDKLoader.getDeviceArch())
+            
+            // Check if FLIR SDK classes are loadable
+            val classesLoaded = try {
+                Class.forName("com.flir.thermalsdk.androidsdk.ThermalSdkAndroid")
+                Class.forName("com.flir.thermalsdk.live.discovery.DiscoveryFactory")
+                true
+            } catch (e: ClassNotFoundException) {
+                false
+            }
+            result.putBoolean("sdkClassesLoaded", classesLoaded)
+            
+            // Discovery state
+            val devices = FlirManager.getDiscoveredDevices()
+            result.putInt("discoveredDeviceCount", devices.size)
+            result.putBoolean("isConnected", FlirManager.isConnected())
+            result.putBoolean("isStreaming", FlirManager.isStreaming())
+            result.putString("connectedDevice", FlirManager.getConnectedDeviceInfo())
+            
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("ERR_DEBUG_INFO", e)
         }
     }
 }
