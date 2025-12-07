@@ -69,12 +69,51 @@ function extractZip(zipPath, dest) {
   if (!fs.existsSync(dest)) {
     throw new Error(`Destination folder ${dest} does not exist. Please create it and re-run installation.`);
   }
-  if (process.platform === 'win32') {
-    // Use PowerShell Expand-Archive
-    execSync(`powershell -NoProfile -Command "Expand-Archive -Force -LiteralPath '${zipPath}' -DestinationPath '${TMP_DIR}'"`, { stdio: 'inherit' });
-  } else {
-    execSync(`unzip -o '${zipPath}' -d '${TMP_DIR}'`, { stdio: 'inherit' });
+  // Preferred: use a pure-Node extractor (adm-zip) so the script is platform-independent.
+  try {
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip(zipPath);
+    zip.extractAllTo(TMP_DIR, true);
+    return;
+  } catch (e) {
+    // If adm-zip isn't available, fall back to system tools.
+    console.log('adm-zip not available, falling back to system extraction tools');
   }
+  // Next preference: system `unzip` (macOS, Linux, and many developer environments). If `unzip` is not available,
+  // try `tar -xf` (some platforms provide bsdtar which can extract zip files), otherwise fail with a helpful message.
+  const cmdExists = (cmd) => {
+    try {
+      if (process.platform === 'win32') {
+        execSync(`where ${cmd}`, { stdio: 'ignore' });
+      } else {
+        execSync(`which ${cmd}`, { stdio: 'ignore' });
+      }
+      return true;
+    } catch (_err) {
+      return false;
+    }
+  };
+
+  if (cmdExists('unzip')) {
+    try {
+      execSync(`unzip -o '${zipPath}' -d '${TMP_DIR}'`, { stdio: 'inherit' });
+      return;
+    } catch (err) {
+      throw new Error(`Failed to extract zip using 'unzip'. Consider installing 'unzip' or adding 'adm-zip' package. Original error: ${err.message}`);
+    }
+  }
+
+  // 'tar' can sometimes extract zip files (via bsdtar). Try it as a last resort.
+  if (cmdExists('tar')) {
+    try {
+      execSync(`tar -xf '${zipPath}' -C '${TMP_DIR}'`, { stdio: 'inherit' });
+      return;
+    } catch (err) {
+      throw new Error(`Failed to extract zip using 'tar'. Consider installing 'unzip' or add 'adm-zip' package. Original error: ${err.message}`);
+    }
+  }
+
+  throw new Error(`No extractor found: please install 'unzip' or add the 'adm-zip' dependency in your project so the fetch script can extract SDK binaries.`);
 }
 
 function copyIosExtractedFiles(tmpFolder, destFolder) {
@@ -193,6 +232,9 @@ async function run() {
   } catch (err) {
     console.error('Failed to fetch binaries:', err.message);
     process.exit(1);
+  } finally {
+    // Always attempt to remove temporary folder to avoid leaving cruft
+    try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch (e) {}
   }
 }
 
