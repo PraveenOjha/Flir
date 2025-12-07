@@ -1,17 +1,4 @@
-export interface DownloadProgress {
-    bytesDownloaded: number;
-    totalBytes: number;
-    percent: number;
-}
-
-export interface FlirDownloadAPI {
-    isAvailable(): Promise<boolean>;
-    getDownloadSize(): Promise<number>;
-    getDownloadSizeFormatted(): Promise<string>;
-    download(onProgress?: (progress: DownloadProgress) => void): Promise<void>;
-    cancel(): void;
-    delete(): Promise<boolean>;
-}
+// FlirDownload API removed: the SDK is bundled at compile time and runtime downloading is not supported.
 
 export interface SDKStatus {
     available: boolean;
@@ -72,5 +59,5 @@ export interface FlirModuleAPI {
     getDebugInfo(): Promise<FlirDebugInfo>;
 }
 
-export declare const FlirDownload: FlirDownloadAPI;
+// FlirDownload removed. Use `FlirModule` APIs instead.
 export declare const FlirModule: FlirModuleAPI;

@@ -1,0 +1,199 @@
+#!/usr/bin/env node
+'use strict';
+const https = require('https');
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
+let IOS_URL = 'https://github.com/PraveenOjha/flir-sdk-binaries/releases/download/v1.0.1/ios.zip';
+let ANDROID_URL = 'https://github.com/PraveenOjha/flir-sdk-binaries/releases/download/v1.0.1/android.zip';
+// Manifest override
+try {
+  const manifest = require(path.join(__dirname, '..', 'sdk-manifest.json'));
+  if (manifest && manifest.ios && manifest.ios.directDownload && manifest.ios.directDownload.downloadUrl) {
+    IOS_URL = manifest.ios.directDownload.downloadUrl;
+  } else if (manifest && manifest.ios && manifest.ios.downloadUrl) {
+    IOS_URL = manifest.ios.downloadUrl;
+  }
+  if (manifest && manifest.android && manifest.android.directDownload && manifest.android.directDownload.downloadUrl) {
+    ANDROID_URL = manifest.android.directDownload.downloadUrl;
+  }
+} catch (err) {
+  // ignore - fall back to embedded constants
+}
+const TMP_DIR = path.join(__dirname, '..', '.tmp-fetch-binaries');
+const DEST_IOS = path.join(__dirname, '..', 'ios', 'Flir', 'Frameworks');
+const DEST_ANDROID = path.join(__dirname, '..', 'android', 'Flir', 'libs');
+
+function ensureTmp() {
+  if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+}
+
+function httpGetWithRedirect(url) {
+  return new Promise((resolve, reject) => {
+    const getter = url.startsWith('https://') ? https : http;
+    getter.get(url, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        resolve(httpGetWithRedirect(res.headers.location));
+      } else if (res.statusCode === 200) {
+        resolve(res);
+      } else {
+        reject(new Error(`Request failed. Status code: ${res.statusCode}`));
+      }
+    }).on('error', reject);
+  });
+}
+
+async function download(url, outPath) {
+  return new Promise(async (resolve, reject) => {
+    console.log(`Downloading ${url}`);
+    try {
+      const res = await httpGetWithRedirect(url);
+      const file = fs.createWriteStream(outPath);
+      res.pipe(file);
+      res.on('end', () => file.end());
+      file.on('finish', () => {
+        console.log(`Saved to ${outPath}`);
+        resolve(outPath);
+      });
+      file.on('error', reject);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function extractZip(zipPath, dest) {
+  // We do NOT create `dest` if missing (user insisted). Fail if not exist.
+  if (!fs.existsSync(dest)) {
+    throw new Error(`Destination folder ${dest} does not exist. Please create it and re-run installation.`);
+  }
+  if (process.platform === 'win32') {
+    // Use PowerShell Expand-Archive
+    execSync(`powershell -NoProfile -Command "Expand-Archive -Force -LiteralPath '${zipPath}' -DestinationPath '${TMP_DIR}'"`, { stdio: 'inherit' });
+  } else {
+    execSync(`unzip -o '${zipPath}' -d '${TMP_DIR}'`, { stdio: 'inherit' });
+  }
+}
+
+function copyIosExtractedFiles(tmpFolder, destFolder) {
+  if (!fs.existsSync(tmpFolder)) return;
+  const entries = fs.readdirSync(tmpFolder, { withFileTypes: true });
+  entries.forEach(entry => {
+    const fullPath = path.join(tmpFolder, entry.name);
+    if (entry.isDirectory()) {
+      // xcframeworks are directories *.xcframework
+      if (entry.name.endsWith('.xcframework') || entry.name.endsWith('.framework') || entry.name.endsWith('.dylib')) {
+        const dest = path.join(destFolder, entry.name);
+        console.log(`Copy/overwrite ${entry.name} -> ${destFolder}`);
+        // remove existing
+        if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
+        fs.renameSync(fullPath, dest);
+      } else {
+        // recursively copy from nested folders
+        copyIosExtractedFiles(fullPath, destFolder);
+      }
+    }
+  });
+}
+
+function copyAndroidExtractedFiles(tmpFolder, destFolder) {
+  if (!fs.existsSync(tmpFolder)) return;
+  const entries = fs.readdirSync(tmpFolder, { withFileTypes: true });
+  entries.forEach(entry => {
+    const fullPath = path.join(tmpFolder, entry.name);
+    if (entry.isFile() && entry.name.endsWith('.aar')) {
+      const dest = path.join(destFolder, entry.name);
+      console.log(`Copy/overwrite ${entry.name} -> ${destFolder}`);
+      if (!fs.existsSync(destFolder)) {
+        throw new Error(`Destination folder ${destFolder} does not exist. Please create it and re-run installation.`);
+      }
+      fs.copyFileSync(fullPath, dest);
+    } else if (entry.isDirectory()) {
+      copyAndroidExtractedFiles(fullPath, destFolder);
+    }
+  });
+}
+
+function hasAndroidAar(folder) {
+  if (!fs.existsSync(folder)) return false;
+  return fs.readdirSync(folder).some(f => f.endsWith('.aar'));
+}
+
+function hasIosFrameworks(folder) {
+  if (!fs.existsSync(folder)) return false;
+  return fs.readdirSync(folder).some(f => f.endsWith('.xcframework') || f.endsWith('.framework') || f.endsWith('.dylib'));
+}
+
+async function run() {
+  try {
+    if (process.env.FLIR_SDK_SKIP_DOWNLOAD === '1' || process.env.FLIR_SDK_SKIP_DOWNLOAD === 'true') {
+      console.log('FLIR_SDK_SKIP_DOWNLOAD set; skipping binary fetch.');
+      return;
+    }
+
+    // Ensure target folders exist - but do NOT create them automatically.
+    if (!fs.existsSync(DEST_ANDROID)) {
+      throw new Error(`Android libs folder ${DEST_ANDROID} does not exist. Please create it (e.g. npm pack or ensure published package includes it).`);
+    }
+    if (!fs.existsSync(DEST_IOS)) {
+      throw new Error(`iOS Frameworks folder ${DEST_IOS} does not exist. Please create it before install.`);
+    }
+
+    ensureTmp();
+
+    const argv = process.argv.slice(2);
+    const args = argv.reduce((acc, cur) => {
+      if (cur.startsWith('--')) acc[cur.replace(/^--/, '')] = true;
+      else acc[cur] = true;
+      return acc;
+    }, {});
+
+    // Skip if present per-platform
+    const skipIfPresent = args['skip-if-present'] || args['skipIfPresent'] || false;
+    const platformArg = args['platform'] || args['p'] || 'all';
+
+    // Short circuit checks: if skipIfPresent set and files exist, skip per platform
+    if (skipIfPresent && platformArg !== 'ios' && hasAndroidAar(DEST_ANDROID)) {
+      console.log('Android AAR(s) detected in libs folder; skipping Android fetch.');
+    } else if (platformArg === 'all' || platformArg === 'android') {
+      // Download Android zip
+      const androidZip = path.join(TMP_DIR, 'android.zip');
+      await download(ANDROID_URL, androidZip);
+      // Extract to TMP_DIR
+      extractZip(androidZip, DEST_ANDROID);
+      // Copy AARs from TMP_DIR to libs
+      copyAndroidExtractedFiles(TMP_DIR, DEST_ANDROID);
+      fs.rmSync(androidZip);
+    }
+
+    // Clean out TMP_DIR (remove all contents) to avoid conflicts for iOS
+    fs.readdirSync(TMP_DIR).forEach(f => {
+      const fp = path.join(TMP_DIR, f);
+      try { fs.rmSync(fp, { recursive: true, force: true }); } catch (e) {}
+    });
+
+    if (skipIfPresent && platformArg !== 'android' && hasIosFrameworks(DEST_IOS)) {
+      console.log('iOS frameworks detected in Frameworks folder; skipping iOS fetch.');
+    } else if (platformArg === 'all' || platformArg === 'ios') {
+      // Download iOS zip
+      const iosZip = path.join(TMP_DIR, 'ios.zip');
+      await download(IOS_URL, iosZip);
+      extractZip(iosZip, DEST_IOS);
+      // Move xcframeworks and dylibs
+      copyIosExtractedFiles(TMP_DIR, DEST_IOS);
+      fs.rmSync(iosZip);
+    }
+
+    // Cleanup tmp
+    try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch (e) {}
+
+    console.log('FLIR SDK binaries fetched and installed into the package folders.');
+  } catch (err) {
+    console.error('Failed to fetch binaries:', err.message);
+    process.exit(1);
+  }
+}
+
+run();

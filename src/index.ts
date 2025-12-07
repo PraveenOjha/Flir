@@ -1,5 +1,4 @@
-export { FlirDownload } from './FlirDownload';
-export type { DownloadProgress, FlirDownloadAPI } from './FlirDownload';
+// FlirDownload removed: SDK is now bundled at compile time; runtime downloads are no longer supported.
 
 // Re-export existing FlirModule functionality
 // Note: FlirModule should be imported from the native module

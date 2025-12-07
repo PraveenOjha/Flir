@@ -1,7 +1,14 @@
 Pod::Spec.new do |s|
   s.name         = 'Flir'
   s.version      = '2.0.0'
-  s.summary      = 'FLIR Thermal SDK React Native - On-Demand Download'
+  s.summary      = 'FLIR Thermal SDK React Native - Bundled via postinstall'
+  s.description  = <<-DESC
+    A React Native wrapper for the FLIR Thermal SDK, providing thermal imaging
+    capabilities for iOS applications. Supports discovery, connection, and 
+    streaming from FLIR ONE and other FLIR thermal cameras.
+    
+    Can be built with or without the FLIR SDK using the FLIR_ENABLED flag.
+  DESC
   s.homepage     = 'https://github.com/PraveenOjha/Flir'
   s.license      = { :type => 'MIT' }
   s.author       = { 'Praveen Ojha' => 'https://github.com/PraveenOjha' }
@@ -9,23 +16,124 @@ Pod::Spec.new do |s|
   s.platform     = :ios, '13.0'
   s.swift_version = '5.0'
 
+  # Source files
   s.source_files = [
     'ios/Flir/src/**/*.{h,m,mm,swift}',
     'ios/Flir/SDKLoader/**/*.{h,m,swift}'
   ]
   s.public_header_files = 'ios/Flir/src/**/*.h'
   
+  # Resource bundles for SDK manifest
   s.resource_bundles = {
     'FlirSDKResources' => ['sdk-manifest.json']
   }
   
-  s.frameworks = 'ExternalAccessory', 'Foundation', 'UIKit'
+  # System frameworks
+  s.frameworks = 'ExternalAccessory', 'Foundation', 'UIKit', 'Metal', 'MetalKit'
   
-  s.pod_target_xcconfig = {
-    'OTHER_LDFLAGS' => '-weak_framework ThermalSDK',
-    'ENABLE_BITCODE' => 'NO',
-    'HEADER_SEARCH_PATHS' => '"$(PODS_TARGET_SRCROOT)/ios/Flir/Framework"'
+  # React Native dependency
+  s.dependency 'React-Core'
+  
+  # ==========================================================================
+  # FLIR SDK CONFIGURATION
+  # ==========================================================================
+  # 
+  # By default, this pod builds WITH FLIR SDK support. To build WITHOUT the
+  # FLIR SDK (for development on machines without paid developer license):
+  #
+  # Option 1: Environment variable
+  #   FLIR_DISABLED=1 pod install
+  #
+  # Option 2: In your app's Podfile, before `use_native_modules!`:
+  #   ENV['FLIR_DISABLED'] = '1'
+  #
+  # When FLIR is disabled, the module provides fallback stub implementations
+  # that return placeholder images and mock temperature data.
+  # ==========================================================================
+  
+  flir_disabled = ENV['FLIR_DISABLED'] == '1' || ENV['FLIR_DISABLED'] == 'true'
+  
+  if flir_disabled
+    puts "[Flir.podspec] ⚠️  Building WITHOUT FLIR SDK (FLIR_DISABLED=1)"
+    
+    s.pod_target_xcconfig = {
+      'ENABLE_BITCODE' => 'NO',
+      'GCC_PREPROCESSOR_DEFINITIONS' => '$(inherited) FLIR_DISABLED=1',
+      'SWIFT_ACTIVE_COMPILATION_CONDITIONS' => '$(inherited)',
+      'OTHER_SWIFT_FLAGS' => '$(inherited)'
+    }
+  else
+    puts "[Flir.podspec] ✅ Building WITH FLIR SDK support"
+    
+    # Check if ThermalSDK.xcframework exists in the SDK folder
+    sdk_framework_path = File.join(__dir__, 'ios', 'Flir', 'Frameworks', 'ThermalSDK.xcframework')
+    sdk_available = File.exist?(sdk_framework_path)
+    
+    if sdk_available
+      puts "[Flir.podspec] ✅ ThermalSDK.xcframework found"
+      
+      # Vendored frameworks - the actual SDK
+      s.vendored_frameworks = [
+        'ios/Flir/Frameworks/ThermalSDK.xcframework',
+        'ios/Flir/Frameworks/libavcodec.61.dylib.xcframework',
+        'ios/Flir/Frameworks/libavdevice.61.dylib.xcframework', 
+        'ios/Flir/Frameworks/libavfilter.10.dylib.xcframework',
+        'ios/Flir/Frameworks/libavformat.61.dylib.xcframework',
+        'ios/Flir/Frameworks/libavutil.59.dylib.xcframework',
+        'ios/Flir/Frameworks/liblive666.dylib.xcframework',
+        'ios/Flir/Frameworks/libswresample.5.dylib.xcframework',
+        'ios/Flir/Frameworks/libswscale.8.dylib.xcframework'
+      ].select { |f| File.exist?(File.join(__dir__, f)) }
+      
+      s.pod_target_xcconfig = {
+        'ENABLE_BITCODE' => 'NO',
+        'ENABLE_LIBRARY_VALIDATION' => 'NO',
+        'LD_RUNPATH_SEARCH_PATHS' => '$(inherited) @executable_path/Frameworks @loader_path/Frameworks',
+        'GCC_PREPROCESSOR_DEFINITIONS' => '$(inherited) FLIR_SDK_AVAILABLE=1',
+        'SWIFT_ACTIVE_COMPILATION_CONDITIONS' => '$(inherited) FLIR_ENABLED',
+        'OTHER_SWIFT_FLAGS' => '$(inherited) -DFLIR_ENABLED',
+        'HEADER_SEARCH_PATHS' => '$(inherited) "$(PODS_TARGET_SRCROOT)/ios/Flir/Framework"'
+      }
+    else
+      puts "[Flir.podspec] ⚠️  ThermalSDK.xcframework NOT found - using header stubs only"
+      puts "[Flir.podspec] To enable full SDK, copy FLIR SDK xcframeworks to ios/Flir/Frameworks/"
+      
+      # Use weak linking to allow compilation without actual framework
+      s.pod_target_xcconfig = {
+        'ENABLE_BITCODE' => 'NO',
+        'OTHER_LDFLAGS' => '-weak_framework ThermalSDK',
+        'HEADER_SEARCH_PATHS' => '$(inherited) "$(PODS_TARGET_SRCROOT)/ios/Flir/Framework"',
+        'GCC_PREPROCESSOR_DEFINITIONS' => '$(inherited)',
+        'SWIFT_ACTIVE_COMPILATION_CONDITIONS' => '$(inherited)',
+        'OTHER_SWIFT_FLAGS' => '$(inherited)'
+      }
+    end
+  end
+  
+  # User target configuration
+  s.user_target_xcconfig = {
+    'ENABLE_BITCODE' => 'NO'
   }
   
-  s.dependency 'React-Core'
+  # Additional notes for integrating the SDK
+  s.description = <<-DESC
+    FLIR Thermal SDK React Native wrapper for iOS.
+    
+    INSTALLATION:
+    1. Install via npm: npm install ilabs-flir
+    2. Run pod install in your iOS directory
+    
+    SDK SETUP:
+    The FLIR ThermalSDK is not included in the repo due to licensing, but this package
+    provides a `postinstall` script that can download official release artifacts and
+    place them into `ios/Flir/Frameworks/` and `android/Flir/libs/` during npm install.
+    To enable full functionality manually:
+    1. Download ThermalSDK.xcframework from FLIR
+    2. Copy to node_modules/ilabs-flir/ios/Flir/Frameworks/
+    3. Run pod install again
+    
+    BUILDING WITHOUT SDK:
+    Set FLIR_DISABLED=1 before pod install to build without SDK.
+    This enables development without a paid FLIR developer license.
+  DESC
 end

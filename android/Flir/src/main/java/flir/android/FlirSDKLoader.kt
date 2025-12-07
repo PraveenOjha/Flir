@@ -40,17 +40,7 @@ object FlirSDKLoader {
         return true
     }
     
-    /**
-     * No download needed - SDK is bundled
-     */
-    suspend fun downloadSDK(
-        context: Context,
-        onProgress: ((progress: Int, bytesDownloaded: Long, totalBytes: Long) -> Unit)? = null
-    ): Boolean {
-        Log.d(TAG, "SDK is bundled - no download needed")
-        onProgress?.invoke(100, 0, 0)
-        return true
-    }
+    // downloadSDK removed. Runtime downloads are not supported; SDK is bundled at compile-time.
     
     /**
      * Get SDK status

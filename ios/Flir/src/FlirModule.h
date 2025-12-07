@@ -1,9 +1,16 @@
-#import <Foundation/Foundation.h>
+//
+//  FlirModule.h
+//  Flir
+//
+//  React Native bridge module for FLIR thermal camera SDK
+//
+
 #import <React/RCTBridgeModule.h>
+#import <React/RCTEventEmitter.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
-@interface FlirModule : NSObject <RCTBridgeModule>
+@interface FlirModule : RCTEventEmitter <RCTBridgeModule>
 
 @end
 

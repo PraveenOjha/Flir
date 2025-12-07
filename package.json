@@ -1,11 +1,12 @@
 {
   "name": "ilabs-flir",
-  "version": "1.0.7",
-  "description": "FLIR Thermal SDK for React Native - On-Demand Download",
+  "version": "1.0.9",
+  "description": "FLIR Thermal SDK for React Native - iOS & Android (bundled at compile time via postinstall)",
   "main": "src/index.js",
   "types": "src/index.d.ts",
   "scripts": {
-    "download-sdk": "node scripts/download-sdk.js",
+    "postinstall": "node scripts/fetch-binaries.js",
+    "fetch-binaries": "node scripts/fetch-binaries.js",
     "typecheck": "tsc --noEmit"
   },
   "files": [
@@ -15,8 +16,8 @@
     "android/Flir/libs/",
     "ios/Flir/src/",
     "ios/Flir/SDKLoader/",
-    "ios/Flir/libs/.gitkeep",
     "ios/Flir/Framework/",
+    "ios/Flir/Frameworks/",
     "app.plugin.js",
     "Flir.podspec",
     "sdk-manifest.json",
@@ -34,7 +35,9 @@
     "config-plugin",
     "flir-one",
     "thermal-imaging",
-    "infrared"
+    "infrared",
+    "ios",
+    "android"
   ],
   "repository": {
     "type": "git",
@@ -57,5 +60,13 @@
     "typescript": "^5.0.0",
     "@types/react": "*",
     "@types/react-native": "*"
+  },
+  "react-native": {
+    "ios": {
+      "podspec": "./Flir.podspec"
+    },
+    "android": {
+      "sourceDir": "./android/Flir"
+    }
   }
 }

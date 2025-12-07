@@ -1,4 +1,4 @@
-export { FlirDownload } from './FlirDownload';
+// FlirDownload removed; use `FlirModule` for runtime access to SDK features.
 
 // Re-export existing FlirModule functionality
 // Note: FlirModule should be imported from the native module

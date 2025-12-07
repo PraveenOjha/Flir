@@ -1,228 +1,46 @@
-# FLIR Thermal SDK - React Native
-
-A React Native wrapper for the FLIR Thermal SDK, providing thermal imaging capabilities for both Android and iOS applications.
-
-[![](https://jitpack.io/v/PraveenOjha/Flir.svg)](https://jitpack.io/#PraveenOjha/Flir)
-
-## Features
-
-- 📱 Cross-platform support (Android & iOS)
-- 🔥 Real-time thermal imaging
-- 📸 Thermal image capture and processing
-- 🎨 Customizable color palettes
-- 📊 Temperature measurement and analysis
-- ⚡ **Automatic permission setup** (no manual manifest/plist editing required)
-- 📦 **On-demand SDK download** (~100MB downloaded only when needed)
-- 🔌 USB & Bluetooth device support
-- 🎮 Emulator mode for development without hardware
-
-## Installation
-
-### npm Installation
-
-```bash
-npm install ilabs-flir
-# or
-yarn add ilabs-flir
-```
-
-### On-Demand SDK Download
-
-The FLIR SDK binaries (~100MB) are **not bundled** with this package. They are downloaded on-demand when thermal features are first used.
-
-#### Quick Start
-
-```typescript
-import React, { useState, useEffect } from 'react';
-import { View, Text, Button, ActivityIndicator } from 'react-native';
-import { FlirDownload, FlirModule } from 'ilabs-flir';
-
-function ThermalCamera() {
-  const [sdkReady, setSdkReady] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-  const [progress, setProgress] = useState(0);
-
-  useEffect(() => {
-    checkAndDownloadSDK();
-  }, []);
-
-  const checkAndDownloadSDK = async () => {
-    try {
-      // Check if SDK is already available
-      const available = await FlirDownload.isAvailable();
-      
-      if (available) {
-        setSdkReady(true);
-        return;
-      }
-
-      // Get download size to show user
-      const size = await FlirDownload.getDownloadSizeFormatted(); // "100 MB"
-      console.log(`SDK needs to be downloaded: ${size}`);
-
-      // Download with progress tracking
-      setDownloading(true);
-      await FlirDownload.download((progress) => {
-        setProgress(progress.percent);
-        console.log(`Downloading: ${progress.percent.toFixed(0)}%`);
-      });
-
-      setDownloading(false);
-      setSdkReady(true);
-      console.log('SDK ready!');
-    } catch (error) {
-      console.error('SDK download failed:', error);
-      setDownloading(false);
-    }
-  };
-
-  if (downloading) {
-    return (
-      <View>
-        <Text>Downloading FLIR SDK...</Text>
-        <Text>{progress.toFixed(0)}%</Text>
-        <ActivityIndicator size="large" />
-      </View>
-    );
-  }
-
-  if (!sdkReady) {
-    return (
-      <View>
-        <Text>FLIR SDK not available</Text>
-        <Button title="Download SDK" onPress={checkAndDownloadSDK} />
-      </View>
-    );
-  }
-
-  // SDK is ready, use FLIR features
-  return (
-    <View>
-      <Button title="Start Discovery" onPress={() => FlirModule.startDiscovery()} />
-    </View>
-  );
-}
-```
-
-#### FlirDownload API Reference
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `isAvailable()` | `Promise<boolean>` | Check if SDK is already downloaded |
-| `getDownloadSize()` | `Promise<number>` | Get download size in bytes |
-| `getDownloadSizeFormatted()` | `Promise<string>` | Get human-readable size (e.g., "100 MB") |
-| `download(onProgress?)` | `Promise<void>` | Download SDK with optional progress callback |
-| `cancel()` | `void` | Cancel ongoing download |
-| `delete()` | `Promise<boolean>` | Remove downloaded SDK |
-
-#### Progress Callback
-
-```typescript
-await FlirDownload.download((progress) => {
-  console.log('Downloaded:', progress.bytesDownloaded);
-  console.log('Total:', progress.totalBytes);
-  console.log('Percent:', progress.percent); // 0-100
-});
-```
-
 #### Best Practices
 
-**1. Download on First Launch**
-```typescript
-// In your App.tsx or main component
-useEffect(() => {
-  const initSDK = async () => {
-    const available = await FlirDownload.isAvailable();
-    if (!available) {
-      // Show a modal or screen explaining the download
-      await FlirDownload.download((progress) => {
-        updateProgressBar(progress.percent);
-      });
-    }
-  };
-  initSDK();
-}, []);
-```
+Since the FLIR SDK is compiled into this package at build time, you generally do not need to manage runtime downloads. The following guidelines help when including or updating SDK artifacts:
 
-**2. Download Before Feature Access**
-```typescript
-const openThermalCamera = async () => {
-  const available = await FlirDownload.isAvailable();
-  
-  if (!available) {
-    Alert.alert(
-      'Download Required',
-      'FLIR SDK needs to be downloaded (100 MB). Continue?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Download', 
-          onPress: async () => {
-            await FlirDownload.download((p) => console.log(p.percent));
-            navigation.navigate('ThermalCamera');
-          }
-        }
-      ]
-    );
-  } else {
-    navigation.navigate('ThermalCamera');
-  }
-};
-```
+1. Verify that the SDK artifacts are present in the package (`android/Flir/libs/` and `ios/Flir/Frameworks/`) before building your app.
+2. For development builds without a vendor SDK, set `FLIR_DISABLED=1` or compile without `FLIR_ENABLED` to use stubbed behavior.
+3. When updating vendor binaries, follow the vendor release and copy the updated AAR/XCFramework files in place before building.
+<!-- Runtime SDK download examples removed. The FLIR SDK is included at compile-time; see 'Bundled SDK' above. -->
 
-**3. Handle Errors**
-```typescript
-try {
-  await FlirDownload.download((progress) => {
-    setProgress(progress.percent);
-  });
-} catch (error) {
-  if (error.message.includes('Checksum')) {
-    Alert.alert('Download Error', 'File verification failed. Please try again.');
-  } else if (error.message.includes('Network')) {
-    Alert.alert('Network Error', 'Please check your internet connection.');
-  } else {
-    Alert.alert('Error', 'SDK download failed. Please try again.');
-  }
-}
-```
+#### Bundled SDK: Where to get and how to update vendor binaries
 
-**4. Show Download Size First**
-```typescript
-const size = await FlirDownload.getDownloadSizeFormatted();
-Alert.alert(
-  'Download Required',
-  `FLIR SDK (${size}) needs to be downloaded. This is a one-time download.`,
-  [
-    { text: 'Cancel' },
-    { text: 'Download', onPress: () => downloadSDK() }
-  ]
-);
-```
+The FLIR SDK native binaries (Android AAR and iOS XCFramework) are included in this package at compile time under:
 
-#### Where SDKs Are Downloaded From
+- Android: `android/Flir/libs/` (AAR files)
+- iOS: `ios/Flir/Frameworks/` (XCFrameworks and related dylibs)
 
-- **Android**: GitHub Releases (with optional Google Play Feature Delivery support)
-- **iOS**: GitHub Releases
-- **Source**: https://github.com/PraveenOjha/flir-sdk-binaries/releases
-- **Security**: SHA256 checksum verification on all downloads
 
-#### Offline Usage
+If you need to update the vendor binaries (for example, to a newer FLIR SDK release), download the official release artifacts or rely on the built-in postinstall hook which downloads the binary zips and extracts the native files into the module folders.
 
-Once downloaded, the SDK is stored permanently on the device:
-- **iOS**: `Application Support/FlirSDK/`
-- **Android**: App's internal storage
+- Official artifacts: https://github.com/PraveenOjha/flir-sdk-binaries/releases
+- Android archive (zip): https://github.com/PraveenOjha/flir-sdk-binaries/releases/download/v1.0.1/android.zip
+- iOS archive (zip): https://github.com/PraveenOjha/flir-sdk-binaries/releases/download/v1.0.1/ios.zip
 
-No internet connection needed after initial download.
+Automated download on package install
+------------------------------------
 
-### Manual SDK Download (Development)
+This package includes a `postinstall` script which attempts to download the vendor zip archives and extract the artifacts when you run `npm install`. The hook will:
 
-For development, you can pre-download the SDK:
+- Download `android.zip` and extract `.aar` files into `android/Flir/libs/`
+- Download `ios.zip` and extract `.xcframework`/`.dylib`/`.framework` files into `ios/Flir/Frameworks/`
 
-```bash
-npm run download-sdk ios
-npm run download-sdk android
-```
+Important notes:
+- The installer expects both `android/Flir/libs/` and `ios/Flir/Frameworks/` to already exist inside the installed package — it will NOT create those directories and will fail if they are missing. Do NOT delete those directories from the package.
+- To skip automated download for CI or manual installs, set `FLIR_SDK_SKIP_DOWNLOAD=1` before `npm install`.
+- If you prefer not to use the postinstall hook, you can manually download and extract the release zips into the same folders.
+
+After extracting the archives, ensure the following files are in the right place:
+
+- `android/Flir/libs/thermalsdk-release.aar`
+- `android/Flir/libs/androidsdk-release.aar`
+- `ios/Flir/Frameworks/ThermalSDK.xcframework` and related frameworks/dylibs
+
+Build the app normally. There are no runtime downloads performed — the SDK is packaged with the module.
 
 ### Advanced: Google Play Feature Delivery (Android)
 
@@ -264,28 +82,13 @@ For production Android apps distributed via Google Play Store, you can use **Pla
 
 ### Quick Install
 
-#### Android (via JitPack)
+#### Android (via local AARs / npm)
 
-1. Add JitPack repository to your root `build.gradle`:
+1. Ensure the AAR files are present under `android/Flir/libs/` (the package includes them by default). If you are updating the SDK, download `android.zip` from the release artifacts and extract the `.aar` files into `android/Flir/libs/`.
 
-```gradle
-allprojects {
-    repositories {
-        // ... other repositories
-        maven { url 'https://jitpack.io' }
-    }
-}
-```
+2. The Gradle configuration in `android/Flir/build.gradle.kts` references those `.aar` files (e.g., `api(files("libs/thermalsdk-release.aar"))`), so you don't need to add external repositories.
 
-2. Add the dependency to your app's `build.gradle`:
-
-```gradle
-dependencies {
-    implementation 'com.github.PraveenOjha:Flir:1.0.0'
-}
-```
-
-3. Sync your Gradle files.
+3. Sync your Gradle files or rebuild your Android app.
 
 **✅ Android permissions are automatically merged!** The library includes:
 - USB host feature (for FLIR ONE USB devices)
@@ -298,8 +101,11 @@ No manual `AndroidManifest.xml` editing required!
 1. Add the following to your `Podfile`:
 
 ```ruby
-# From GitHub repository (recommended)
-pod 'Flir', :git => 'https://github.com/PraveenOjha/Flir.git', :tag => '1.0.0'
+# From npm package (recommended)
+# The pod will be auto-linked via react-native config
+
+# OR from GitHub repository
+pod 'Flir', :git => 'https://github.com/PraveenOjha/Flir.git', :tag => '2.0.0'
 
 # OR for local development
 pod 'Flir', :podspec => '../path/to/Flir/Flir.podspec'
@@ -311,6 +117,55 @@ pod 'Flir', :podspec => '../path/to/Flir/Flir.podspec'
 cd ios
 pod install
 ```
+
+##### Building Without FLIR SDK (No Paid License)
+
+If you don't have a paid FLIR developer license, you can build the app without the FLIR SDK. The module will provide fallback stub implementations:
+
+```bash
+# Set environment variable before pod install
+FLIR_DISABLED=1 pod install
+
+# Or in your Podfile:
+ENV['FLIR_DISABLED'] = '1'
+```
+
+When `FLIR_DISABLED=1`:
+- ✅ App compiles without FLIR SDK frameworks
+- ✅ All module methods still work (return stubs/fallbacks)
+- ✅ Fallback thermal-style gradient images are generated
+- ❌ No actual thermal camera functionality
+
+##### Including FLIR SDK (Paid License Required)
+
+To enable full FLIR functionality:
+
+1. Download ThermalSDK.xcframework from FLIR
+2. Copy the following xcframeworks to `node_modules/ilabs-flir/ios/Flir/Frameworks/`:
+   - `ThermalSDK.xcframework`
+   - `libavcodec.61.dylib.xcframework`
+   - `libavdevice.61.dylib.xcframework`
+   - `libavfilter.10.dylib.xcframework`
+   - `libavformat.61.dylib.xcframework`
+   - `libavutil.59.dylib.xcframework`
+   - `liblive666.dylib.xcframework`
+   - `libswresample.5.dylib.xcframework`
+   - `libswscale.8.dylib.xcframework`
+3. Run `pod install` (without FLIR_DISABLED)
+
+Automatic SDK download
+----------------------
+
+If you install this package from npm/yarn, a `postinstall` hook will try to download the SDK binaries for both iOS and Android automatically using the URLs in `sdk-manifest.json`. The files are placed as follows:
+
+- iOS: `ios/Flir/Frameworks/` (xcframeworks)
+- Android: `android/Flir/libs/` (AAR files)
+
+Controls:
+- Skip automatic download by setting: `FLIR_SDK_SKIP_DOWNLOAD=1`.
+- Skip downloading if an expected artifact is already present: `--skip-if-present` when running the `fetch-binaries` script.
+- Manual download: `npm run fetch-binaries -- --all` to force a manual download of both targets.
+
 
 3. **Choose ONE of these options for iOS permissions:**
 
@@ -1035,81 +890,21 @@ const FlirEmitter = new NativeEventEmitter(); // No events will fire!
 3. **Use emulator for UI development**: Build UI without physical hardware
 4. **Cache device info**: Don't call `getConnectedDeviceInfo()` repeatedly
 
-## Publishing to JitPack
+## Publishing & CI
 
-To publish a new version to JitPack:
+This library is distributed primarily via npm (JavaScript package). Android and iOS native binaries (AAR & XCFramework) are included in the package for compile-time integration.
 
-1. Commit all your changes:
-```bash
-git add .
-git commit -m "Release version 1.0.0"
+Publishing and CI notes:
+- If you need to publish the Android artifacts to a Maven repository (for example, for internal use), push the AARs to a Maven repository and update the Gradle configuration accordingly.
+- If you run into duplicate-class issues such as `org.slf4j.*`, prefer excluding `org.slf4j:slf4j-api` at the app or module configuration:
+
+```kotlin
+configurations.all {
+   exclude(group = "org.slf4j", module = "slf4j-api")
+}
 ```
 
-2. Create a git tag:
-```bash
-git tag 1.0.0
-git push origin 1.0.0
-```
-
-3. JitPack will automatically build your library when someone requests it for the first time.
-
-### JitPack / CI notes for local AAR dependencies
-
-If your module includes local AARs (for example the FLIR SDK binaries under `android/Flir/libs/`), CI environments such as JitPack will not automatically resolve file-based dependencies. To publish or build on JitPack you must ensure those AARs are available to the build system.
-
-Two options:
-- Publish the AARs to a repository (mavenLocal or a remote Maven repo) before building the module.
-- Bundle the AARs into the final AAR using a "fat-AAR" approach.
-
-The repository is configured to publish the FLIR SDK AARs into `mavenLocal` during the JitPack build (see `jitpack.yml`). That lets the `Flir` module resolve them by coordinates (`com.flir:thermalsdk:1.0.0` and `com.flir:androidsdk:1.0.0`) and prevents missing-class failures when JitPack builds the library.
-
-### SLF4J duplicate-class conflict
-
-If you see build errors about duplicate classes in `org.slf4j.*` (for example `Duplicate class org.slf4j.Logger`), this happens when:
-
-- The vendor AAR (androidsdk/thermalsdk) embeds SLF4J classes inside the AAR's classes.jar;
-- And your project or another dependency brings `org.slf4j:slf4j-api:...` as a separate jar. Gradle fails because the same classes exist twice.
-
-Two ways to resolve this without editing the vendor AAR:
-
-1) Exclude SLF4J API from your build (preferred when vendor AAR bundles SLF4J classes):
-
-    In your module's build.gradle.kts (or in the consuming app), add:
-
-    ```kotlin
-    configurations.all {
-         exclude(group = "org.slf4j", module = "slf4j-api")
-    }
-    ```
-
-    This prevents Gradle from pulling `slf4j-api` into the classpath and avoids duplicates.
-
-2) Provide a single canonical SLF4J provider at runtime (if your app needs the slf4j API):
-
-    Add a single SLF4J implementation/binding (for example `org.slf4j:slf4j-android` or an appropriate binding) and ensure other copies are excluded.
-
-Notes:
-- We updated the Flir module to exclude `org.slf4j:slf4j-api` so it will not bring the API transitively. If you're still seeing duplicates in your app, check other dependencies and exclude slf4j there or use option 1.
-- If you want me to, I can help you create a more robust fix (publishing Android AAR wrappers without embedded SLF4J or shading/relocating SLF4J) depending on your distribution needs.
-
-4. Check build status at: `https://jitpack.io/#PraveenOjha/Flir`
-
-### Notes for CI / JitPack
-
-If the Android build succeeds locally but fails on JitPack/CI with an error like:
-
-```
-Error: Unable to access jarfile /home/jitpack/build/gradle/wrapper/gradle-wrapper.jar
-```
-
-this typically means the Gradle wrapper files are missing from the published repository. JitPack runs builds in a clean VM and expects the wrapper files to be present in the repo. To make the build reproducible on JitPack, ensure you commit the following files:
-
-- `gradle/wrapper/gradle-wrapper.jar`
-- `gradle/wrapper/gradle-wrapper.properties`
-- `gradlew` (ensure executable bit is set)
-- `gradlew.bat`
-
-After committing those files, trigger a new JitPack build (or push a new tag). Avoid committing `local.properties` — it contains developer-specific SDK paths and will break CI if present.
+Additional changes may include publishing the AARs into `mavenLocal` during your DR/CI pipeline if you use CI that expects Maven artifacts.
 
 ## Publishing to CocoaPods
 

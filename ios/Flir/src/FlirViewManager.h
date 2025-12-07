@@ -1,3 +1,10 @@
+//
+//  FlirViewManager.h
+//  Flir
+//
+//  React Native view manager for FLIR preview
+//
+
 #import <React/RCTViewManager.h>
 
 NS_ASSUME_NONNULL_BEGIN

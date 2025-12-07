@@ -116,8 +116,8 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             val result = com.facebook.react.bridge.Arguments.createMap()
             result.putBoolean("available", available)
             result.putString("arch", arch)
-            result.putString("dexPath", dexPath?.absolutePath ?: "not downloaded")
-            result.putString("nativeLibPath", nativeLibDir?.absolutePath ?: "not downloaded")
+            result.putString("dexPath", dexPath?.absolutePath ?: "not present (bundled SDK missing)")
+            result.putString("nativeLibPath", nativeLibDir?.absolutePath ?: "not present (bundled SDK missing)")
             result.putBoolean("dexExists", dexPath?.exists() == true)
             result.putBoolean("nativeLibsExist", nativeLibDir?.exists() == true)
             

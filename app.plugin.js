@@ -2,6 +2,7 @@ const {
   withInfoPlist,
   withAndroidManifest,
   withDangerousMod,
+  withEntitlementsPlist,
   createRunOncePlugin,
 } = require('@expo/config-plugins');
 const fs = require('fs');
@@ -18,28 +19,47 @@ const path = require('path');
  *   "plugins": ["ilabs-flir"]
  * }
  * 
- * Or with custom descriptions:
+ * Or with options:
  * {
  *   "plugins": [
  *     ["ilabs-flir", {
- *       "bluetoothAlwaysUsageDescription": "Custom description here",
- *       "bluetoothPeripheralUsageDescription": "Custom description here"
+ *       "lightningOnly": true,  // iOS ONLY: Skip network/WiFi permissions
+ *       "disableNetworkPermissions": true,  // Same as lightningOnly (iOS only)
+ *       "bluetoothAlwaysUsageDescription": "Custom description",
+ *       "localNetworkUsageDescription": "Custom description"
  *     }]
  *   ]
  * }
+ * 
+ * FLAGS:
+ * - lightningOnly / disableNetworkPermissions (iOS ONLY): 
+ *   Set to true to skip Local Network, Bonjour, and Bluetooth permissions on iOS.
+ *   Use this if you only need Lightning-connected FLIR ONE devices
+ *   and don't have a paid Apple Developer license.
+ *   NOTE: This flag does NOT affect Android - Android always gets all permissions.
  */
 
+// External Accessory Protocols for FLIR ONE Lightning devices
 const EXTERNAL_ACCESSORY_PROTOCOLS = [
   'com.flir.rosebud.config',
   'com.flir.rosebud.frame',
   'com.flir.rosebud.fileio',
 ];
 
-const DEFAULT_BLUETOOTH_ALWAYS_DESCRIPTION =
-  'This app requires Bluetooth to connect to FLIR thermal cameras via Bluetooth Low Energy';
+// Bonjour services for FLIR network discovery
+const BONJOUR_SERVICES = [
+  '_flir._tcp',
+  '_http._tcp',
+];
 
-const DEFAULT_BLUETOOTH_PERIPHERAL_DESCRIPTION =
-  'This app uses Bluetooth to communicate with FLIR thermal imaging devices';
+// Default permission descriptions
+const DEFAULT_DESCRIPTIONS = {
+  bluetoothAlways: 'This app requires Bluetooth to connect to FLIR ONE Edge and other wireless thermal cameras via Bluetooth Low Energy.',
+  bluetoothPeripheral: 'This app uses Bluetooth to communicate with FLIR thermal imaging devices.',
+  localNetwork: 'This app needs local network access to discover and connect to FLIR thermal cameras on your WiFi network.',
+  camera: 'This app uses the camera to capture photos and video alongside thermal imaging.',
+  accessoryConnection: 'This app connects to FLIR ONE thermal camera accessories.',
+};
 
 /**
  * Adds FLIR-specific Info.plist entries for iOS
@@ -48,14 +68,22 @@ const withFlirInfoPlist = (config, props = {}) => {
   return withInfoPlist(config, (config) => {
     const infoPlist = config.modResults;
 
-    // Add External Accessory Protocols for FLIR ONE devices
-    // These protocols enable Lightning interface communication (FLIR ONE Classic)
-    // and prepare for Bluetooth LE devices (FLIR ONE Edge/Pro)
+    // Check if network permissions should be skipped
+    const skipNetworkPermissions = props.lightningOnly === true ||
+      props.disableNetworkPermissions === true;
+
+    if (skipNetworkPermissions) {
+      console.log('[ilabs-flir] ⚠️  lightningOnly mode: Skipping network/WiFi permissions');
+    }
+
+    // =========================================================================
+    // EXTERNAL ACCESSORY PROTOCOLS
+    // Required for FLIR ONE devices connected via Lightning port
+    // =========================================================================
     if (!infoPlist.UISupportedExternalAccessoryProtocols) {
       infoPlist.UISupportedExternalAccessoryProtocols = [];
     }
 
-    // Merge protocols without duplicates
     const existingProtocols = infoPlist.UISupportedExternalAccessoryProtocols;
     EXTERNAL_ACCESSORY_PROTOCOLS.forEach((protocol) => {
       if (!existingProtocols.includes(protocol)) {
@@ -63,19 +91,86 @@ const withFlirInfoPlist = (config, props = {}) => {
       }
     });
 
-    // Add Bluetooth permissions for FLIR ONE Edge/Pro (BLE devices)
-    // iOS 13+ requires NSBluetoothAlwaysUsageDescription
-    if (!infoPlist.NSBluetoothAlwaysUsageDescription) {
-      infoPlist.NSBluetoothAlwaysUsageDescription =
-        props.bluetoothAlwaysUsageDescription ||
-        DEFAULT_BLUETOOTH_ALWAYS_DESCRIPTION;
+    // =========================================================================
+    // BLUETOOTH PERMISSIONS
+    // Required for FLIR ONE Edge, FLIR ONE Pro, and other BLE thermal cameras
+    // Skip if lightningOnly mode (BLE requires network discovery in some cases)
+    // =========================================================================
+
+    if (!skipNetworkPermissions) {
+      // iOS 13+ requires NSBluetoothAlwaysUsageDescription
+      if (!infoPlist.NSBluetoothAlwaysUsageDescription) {
+        infoPlist.NSBluetoothAlwaysUsageDescription =
+          props.bluetoothAlwaysUsageDescription || DEFAULT_DESCRIPTIONS.bluetoothAlways;
+      }
+
+      // Older iOS versions (pre-13) require NSBluetoothPeripheralUsageDescription
+      if (!infoPlist.NSBluetoothPeripheralUsageDescription) {
+        infoPlist.NSBluetoothPeripheralUsageDescription =
+          props.bluetoothPeripheralUsageDescription || DEFAULT_DESCRIPTIONS.bluetoothPeripheral;
+      }
     }
 
-    // Older iOS versions (pre-13) require NSBluetoothPeripheralUsageDescription
-    if (!infoPlist.NSBluetoothPeripheralUsageDescription) {
-      infoPlist.NSBluetoothPeripheralUsageDescription =
-        props.bluetoothPeripheralUsageDescription ||
-        DEFAULT_BLUETOOTH_PERIPHERAL_DESCRIPTION;
+    // =========================================================================
+    // LOCAL NETWORK PERMISSION (iOS 14+)
+    // Required for discovering FLIR cameras over WiFi
+    // NOTE: This requires a PAID Apple Developer account to work properly
+    // SKIP if lightningOnly mode
+    // =========================================================================
+    if (!skipNetworkPermissions) {
+      if (!infoPlist.NSLocalNetworkUsageDescription) {
+        infoPlist.NSLocalNetworkUsageDescription =
+          props.localNetworkUsageDescription || DEFAULT_DESCRIPTIONS.localNetwork;
+      }
+
+      // =========================================================================
+      // BONJOUR SERVICES
+      // Required for mDNS/Bonjour network discovery of FLIR cameras
+      // SKIP if lightningOnly mode
+      // =========================================================================
+      if (!infoPlist.NSBonjourServices) {
+        infoPlist.NSBonjourServices = [];
+      }
+
+      const existingBonjour = infoPlist.NSBonjourServices;
+      BONJOUR_SERVICES.forEach((service) => {
+        if (!existingBonjour.includes(service)) {
+          existingBonjour.push(service);
+        }
+      });
+    }
+
+    // =========================================================================
+    // CAMERA PERMISSION (always added)
+    // Required if using visual camera alongside thermal
+    // =========================================================================
+    if (!infoPlist.NSCameraUsageDescription) {
+      infoPlist.NSCameraUsageDescription =
+        props.cameraUsageDescription || DEFAULT_DESCRIPTIONS.camera;
+    }
+
+    // =========================================================================
+    // ACCESSORY CONNECTION (iOS 16.4+)
+    // Only needed for wireless accessories - skip in lightningOnly mode
+    // =========================================================================
+    if (!skipNetworkPermissions) {
+      if (!infoPlist.NSAccessorySetupUsageDescription) {
+        infoPlist.NSAccessorySetupUsageDescription =
+          props.accessorySetupUsageDescription || DEFAULT_DESCRIPTIONS.accessoryConnection;
+      }
+    }
+
+    // =========================================================================
+    // BACKGROUND MODES (always added for Lightning accessory)
+    // Enable external accessory communication in background
+    // =========================================================================
+    if (!infoPlist.UIBackgroundModes) {
+      infoPlist.UIBackgroundModes = [];
+    }
+
+    const backgroundModes = infoPlist.UIBackgroundModes;
+    if (!backgroundModes.includes('external-accessory')) {
+      backgroundModes.push('external-accessory');
     }
 
     return config;
@@ -83,9 +178,22 @@ const withFlirInfoPlist = (config, props = {}) => {
 };
 
 /**
- * Adds FLIR-specific AndroidManifest.xml entries for Android
+ * Adds FLIR-specific entitlements for iOS
  */
-const withFlirAndroidManifest = (config) => {
+const withFlirEntitlements = (config) => {
+  return withEntitlementsPlist(config, (config) => {
+    // Currently no special entitlements needed
+    return config;
+  });
+};
+
+/**
+ * Adds FLIR-specific AndroidManifest.xml entries for Android
+ * NOTE: The lightningOnly flag does NOT apply to Android.
+ * Android always gets all permissions since it doesn't have the same
+ * Apple Developer license restrictions for network discovery.
+ */
+const withFlirAndroidManifest = (config, props = {}) => {
   return withAndroidManifest(config, (config) => {
     const androidManifest = config.modResults;
     const mainApplication = androidManifest.manifest;
@@ -100,38 +208,55 @@ const withFlirAndroidManifest = (config) => {
       mainApplication['uses-permission'] = [];
     }
 
-    // Add USB host feature for FLIR ONE USB devices
-    const usbHostFeature = {
-      $: {
-        'android:name': 'android.hardware.usb.host',
-        'android:required': 'false',
-      },
+    // Helper to add feature
+    const addFeature = (name, required = false) => {
+      const hasFeature = mainApplication['uses-feature'].some(
+        (f) => f.$?.['android:name'] === name
+      );
+      if (!hasFeature) {
+        mainApplication['uses-feature'].push({
+          $: {
+            'android:name': name,
+            'android:required': required ? 'true' : 'false',
+          },
+        });
+      }
     };
 
-    // Check if USB host feature already exists
-    const hasUsbHost = mainApplication['uses-feature'].some(
-      (feature) => feature.$?.['android:name'] === 'android.hardware.usb.host'
-    );
-
-    if (!hasUsbHost) {
-      mainApplication['uses-feature'].push(usbHostFeature);
-    }
-
-    // Add camera permission for FLIR cameras
-    const cameraPermission = {
-      $: {
-        'android:name': 'android.permission.CAMERA',
-      },
+    // Helper to add permission
+    const addPermission = (name) => {
+      const hasPermission = mainApplication['uses-permission'].some(
+        (p) => p.$?.['android:name'] === name
+      );
+      if (!hasPermission) {
+        mainApplication['uses-permission'].push({
+          $: { 'android:name': name },
+        });
+      }
     };
 
-    // Check if camera permission already exists
-    const hasCameraPermission = mainApplication['uses-permission'].some(
-      (permission) => permission.$?.['android:name'] === 'android.permission.CAMERA'
-    );
+    // USB host feature for FLIR ONE USB devices
+    addFeature('android.hardware.usb.host', false);
 
-    if (!hasCameraPermission) {
-      mainApplication['uses-permission'].push(cameraPermission);
-    }
+    // Camera permission
+    addPermission('android.permission.CAMERA');
+
+    // Bluetooth features for FLIR ONE Edge/Pro
+    addFeature('android.hardware.bluetooth', false);
+    addFeature('android.hardware.bluetooth_le', false);
+
+    // WiFi feature for network cameras
+    addFeature('android.hardware.wifi', false);
+
+    // Network permissions (always added on Android)
+    addPermission('android.permission.INTERNET');
+    addPermission('android.permission.ACCESS_NETWORK_STATE');
+    addPermission('android.permission.ACCESS_WIFI_STATE');
+    addPermission('android.permission.BLUETOOTH');
+    addPermission('android.permission.BLUETOOTH_ADMIN');
+    addPermission('android.permission.BLUETOOTH_CONNECT');
+    addPermission('android.permission.BLUETOOTH_SCAN');
+    addPermission('android.permission.ACCESS_FINE_LOCATION'); // Required for BLE scanning
 
     return config;
   });
@@ -146,7 +271,9 @@ const withFlirManifest = (config) => {
     async (config) => {
       const src = path.join(__dirname, 'sdk-manifest.json');
       const dst = path.join(config.modRequest.platformProjectRoot, 'sdk-manifest.json');
-      fs.copyFileSync(src, dst);
+      if (fs.existsSync(src)) {
+        fs.copyFileSync(src, dst);
+      }
       return config;
     },
   ]);
@@ -161,8 +288,10 @@ const withFlirAndroidAssets = (config) => {
     async (config) => {
       const src = path.join(__dirname, 'sdk-manifest.json');
       const dst = path.join(config.modRequest.platformProjectRoot, 'app/src/main/assets/sdk-manifest.json');
-      fs.mkdirSync(path.dirname(dst), { recursive: true });
-      fs.copyFileSync(src, dst);
+      if (fs.existsSync(src)) {
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        fs.copyFileSync(src, dst);
+      }
       return config;
     },
   ]);
@@ -170,12 +299,6 @@ const withFlirAndroidAssets = (config) => {
 
 /**
  * Ensure the Flir Android Gradle module is included in generated projects.
- *
- * Some workflows (Expo prebuild) won't add node_modules subprojects to
- * settings.gradle automatically unless the package exposes autolinking or
- * the plugin performs the edit. When a consumer installs the package and
- * runs prebuild, include the Flir module and wire an app dependency so the
- * native bridge (FlirDownloadManager) is compiled into the app.
  */
 const withFlirAndroidGradle = (config) => {
   return withDangerousMod(config, [
@@ -198,14 +321,11 @@ const withFlirAndroidGradle = (config) => {
 
         if (fs.existsSync(appBuildGradlePath)) {
           let buildTxt = fs.readFileSync(appBuildGradlePath, 'utf8');
-          // Only add implementation project(':Flir') if it's not already present
           if (!/project\('\:Flir'\)/.test(buildTxt)) {
             const depSnippet = `\n    // ilabs-flir: include :Flir when available\n    if (new File(rootDir.getParent(), '${moduleRelPath}').exists()) {\n        implementation project(':Flir')\n    }\n`;
 
-            // Find the first 'dependencies {' occurrence and find its matching closing brace
             const depIndex = buildTxt.search(/\bdependencies\s*\{/);
             if (depIndex !== -1) {
-              // Walk forward to find the matching closing brace for the dependencies block
               let depth = 0;
               let insertPos = -1;
               for (let i = depIndex; i < buildTxt.length; i++) {
@@ -218,15 +338,12 @@ const withFlirAndroidGradle = (config) => {
               }
 
               if (insertPos !== -1) {
-                // Insert snippet just before the closing '}' of the dependencies block
                 buildTxt = buildTxt.slice(0, insertPos) + depSnippet + buildTxt.slice(insertPos);
                 fs.writeFileSync(appBuildGradlePath, buildTxt, 'utf8');
               } else {
-                // Fallback: append to the file
                 fs.appendFileSync(appBuildGradlePath, '\n' + depSnippet, 'utf8');
               }
             } else {
-              // No dependencies block found! Append a new one with the snippet.
               fs.appendFileSync(appBuildGradlePath, '\n' + 'dependencies {' + depSnippet + '\n}\n', 'utf8');
             }
           }
@@ -246,12 +363,12 @@ const withFlirAndroidGradle = (config) => {
 const withFlirThermalSDK = (config, props = {}) => {
   // Apply iOS modifications
   config = withFlirInfoPlist(config, props);
+  config = withFlirEntitlements(config);
   config = withFlirManifest(config);
 
   // Apply Android modifications
-  config = withFlirAndroidManifest(config);
+  config = withFlirAndroidManifest(config, props);
   config = withFlirAndroidAssets(config);
-  // Ensure the Flir Gradle module is included in generated native projects
   config = withFlirAndroidGradle(config);
 
   return config;
@@ -260,5 +377,5 @@ const withFlirThermalSDK = (config, props = {}) => {
 module.exports = createRunOncePlugin(
   withFlirThermalSDK,
   'ilabs-flir',
-  '2.0.2'
+  '2.0.3'
 );
