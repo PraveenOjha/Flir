@@ -15,7 +15,6 @@
     "android/Flir/build.gradle.kts",
     "ios/Flir/src/",
     "ios/Flir/SDKLoader/",
-    "ios/Flir/Framework/",
     
     "app.plugin.js",
     "Flir.podspec",
