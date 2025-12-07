@@ -96,7 +96,7 @@ function extractZip(zipPath, dest) {
 
   if (cmdExists('unzip')) {
     try {
-      execSync(`unzip -o '${zipPath}' -d '${TMP_DIR}'`, { stdio: 'inherit' });
+      execSync(`unzip -o "${zipPath}" -d "${TMP_DIR}"`, { stdio: 'inherit' });
       return;
     } catch (err) {
       throw new Error(`Failed to extract zip using 'unzip'. Consider installing 'unzip' or adding 'adm-zip' package. Original error: ${err.message}`);
@@ -106,7 +106,11 @@ function extractZip(zipPath, dest) {
   // 'tar' can sometimes extract zip files (via bsdtar). Try it as a last resort.
   if (cmdExists('tar')) {
     try {
-      execSync(`tar -xf '${zipPath}' -C '${TMP_DIR}'`, { stdio: 'inherit' });
+      if (process.platform === 'win32') {
+        execSync(`tar -xf "${zipPath}" -C "${TMP_DIR}"`, { stdio: 'inherit' });
+      } else {
+        execSync(`tar -xf '${zipPath}' -C '${TMP_DIR}'`, { stdio: 'inherit' });
+      }
       return;
     } catch (err) {
       throw new Error(`Failed to extract zip using 'tar'. Consider installing 'unzip' or add 'adm-zip' package. Original error: ${err.message}`);
@@ -172,26 +176,66 @@ async function run() {
       return;
     }
 
-    // Ensure target folders exist - but do NOT create them automatically.
-    if (!fs.existsSync(DEST_ANDROID)) {
-      throw new Error(`Android libs folder ${DEST_ANDROID} does not exist. Please create it (e.g. npm pack or ensure published package includes it).`);
-    }
-    if (!fs.existsSync(DEST_IOS)) {
-      throw new Error(`iOS Frameworks folder ${DEST_IOS} does not exist. Please create it before install.`);
-    }
+    // (previous 'ensure target folders exist' logic removed; handling now occurs after args parsing)
 
     ensureTmp();
 
     const argv = process.argv.slice(2);
-    const args = argv.reduce((acc, cur) => {
-      if (cur.startsWith('--')) acc[cur.replace(/^--/, '')] = true;
-      else acc[cur] = true;
-      return acc;
-    }, {});
+    const args = {};
+    for (let i = 0; i < argv.length; i++) {
+      const cur = argv[i];
+      if (cur.startsWith('--')) {
+        if (cur.includes('=')) {
+          const parts = cur.split('=');
+          const key = parts.shift().replace(/^--/, '');
+          const value = parts.join('=');
+          args[key] = value;
+        } else {
+          // if following arg exists and doesn't start with '-', use it as the value
+          const next = argv[i+1];
+          if (next && !next.startsWith('-')) {
+            args[cur.replace(/^--/, '')] = next;
+            i++;
+          } else {
+            args[cur.replace(/^--/, '')] = true;
+          }
+        }
+      } else if (cur.startsWith('-')) {
+        const key = cur.replace(/^-+/, '');
+        const next = argv[i+1];
+        if (next && !next.startsWith('-')) {
+          args[key] = next;
+          i++;
+        } else {
+          args[key] = true;
+        }
+      } else {
+        args[cur] = true;
+      }
+    }
 
     // Skip if present per-platform
     const skipIfPresent = args['skip-if-present'] || args['skipIfPresent'] || false;
     const platformArg = args['platform'] || args['p'] || 'all';
+
+    // Determine whether to create missing dest directories automatically; default is true unless explicitly disabled
+    const noCreate = process.env.FLIR_SDK_NO_CREATE_DEST === '1' || process.env.FLIR_SDK_NO_CREATE_DEST === 'true' || args['no-create-dest'] || args['noCreateDest'];
+    if ((platformArg === 'all' || platformArg === 'android') && !fs.existsSync(DEST_ANDROID)) {
+      if (noCreate) {
+        throw new Error(`Android libs folder ${DEST_ANDROID} does not exist. Please create it (e.g. npm pack or ensure published package includes it).`);
+      } else {
+        console.log(`Android libs folder ${DEST_ANDROID} not found — creating it.`);
+        fs.mkdirSync(DEST_ANDROID, { recursive: true });
+      }
+    }
+    if ((platformArg === 'all' || platformArg === 'ios') && !fs.existsSync(DEST_IOS)) {
+      if (noCreate) {
+        throw new Error(`iOS Frameworks folder ${DEST_IOS} does not exist. Please create it before install.`);
+      } else {
+        console.log(`iOS Frameworks folder ${DEST_IOS} not found — creating it.`);
+        fs.mkdirSync(DEST_IOS, { recursive: true });
+      }
+    }
 
     // Short circuit checks: if skipIfPresent set and files exist, skip per platform
     if (skipIfPresent && platformArg !== 'ios' && hasAndroidAar(DEST_ANDROID)) {
