@@ -3,7 +3,8 @@
 .settings
 build/
 .kotlin/
-
+android/libs/
+ios/Frameworks/
 # Android
 android/build/
 android/*/build/
@@ -84,8 +85,16 @@ jspm_packages/
 .env
 
 # SDK binaries (downloaded/placed by postinstall into platform SDK folders)
-ios/Flir/libs/*.framework
-ios/Flir/libs/*.dylib
-android/Flir/libs/*.aar
+# For Android libs
+android/Flir/libs/
+!android/Flir/libs/.gitkeep
+# For iOS frameworks
+ios/Flir/Frameworks/
+!ios/Flir/Frameworks/.gitkeep
+# Legacy/incorrect pattern (remove explicit lib pattern)
+# ios/Flir/libs/*.framework
+# ios/Flir/libs/*.dylib
+# old aar pattern
+# android/Flir/libs/*.aar
 !ios/Flir/libs/.gitkeep
 !android/Flir/libs/.gitkeep

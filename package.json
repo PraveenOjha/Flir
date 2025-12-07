@@ -1,6 +1,6 @@
 {
   "name": "ilabs-flir",
-  "version": "2.0.5",
+  "version": "2.0.6",
   "description": "FLIR Thermal SDK for React Native - iOS & Android (bundled at compile time via postinstall)",
   "main": "src/index.js",
   "types": "src/index.d.ts",
@@ -13,11 +13,10 @@
     "src/",
     "android/Flir/src/",
     "android/Flir/build.gradle.kts",
-    "android/Flir/libs/",
     "ios/Flir/src/",
     "ios/Flir/SDKLoader/",
     "ios/Flir/Framework/",
-    "ios/Flir/Frameworks/",
+    
     "app.plugin.js",
     "Flir.podspec",
     "sdk-manifest.json",

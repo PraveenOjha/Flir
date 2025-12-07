@@ -32,3 +32,9 @@ scripts/
 __tests__/
 *.test.js
 *.spec.js
+
+# Platform SDK binaries — do NOT include in npm package; they are downloaded during postinstall
+android/Flir/libs/
+!android/Flir/libs/.gitkeep
+ios/Flir/Frameworks/
+!ios/Flir/Frameworks/.gitkeep
