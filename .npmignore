@@ -38,3 +38,9 @@ android/Flir/libs/
 !android/Flir/libs/.gitkeep
 ios/Flir/Frameworks/
 !ios/Flir/Frameworks/.gitkeep
+# Exclude podspecs from the published npm package to avoid duplicate CocoaPods entries
+Flir.podspec
+
+ios/podspecs/
+!ios/podspecs/.gitkeep
+docs/

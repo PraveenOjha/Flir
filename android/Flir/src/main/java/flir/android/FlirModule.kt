@@ -31,22 +31,7 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
         Log.d(TAG, "removeListeners: $count (remaining: $listenerCount)")
     }
 
-    // Simple placeholder conversion: converts an ARGB color to a pseudo-temperature value.
-    // Replace with SDK call when integrating thermalsdk APIs.
-    @ReactMethod
-    fun getTemperatureFromColor(color: Int, promise: Promise) {
-        try {
-            val r = (color shr 16) and 0xFF
-            val g = (color shr 8) and 0xFF
-            val b = color and 0xFF
-            // Luminance-like value scaled to a plausible temperature range (0°C - 400°C)
-            val lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
-            val temp = 0.0 + (lum / 255.0) * 400.0
-            promise.resolve(temp)
-        } catch (e: Exception) {
-            promise.reject("ERR_FLIR_CONVERT", e)
-        }
-    }
+    // Removed placeholder conversion getTemperatureFromColor: synthetic temperature generation removed
 
     @ReactMethod
     fun getLatestFramePath(promise: Promise) {
@@ -145,6 +130,46 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             promise.resolve(result)
         } catch (e: Exception) {
             promise.reject("ERR_FLIR_DEVICES", e)
+        }
+    }
+
+    @ReactMethod
+    fun setPreferSdkRotation(prefer: Boolean, promise: Promise) {
+        try {
+            FlirManager.setPreferSdkRotation(prefer)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_SET_ROTATION_PREF", e)
+        }
+    }
+
+    @ReactMethod
+    fun isPreferSdkRotation(promise: Promise) {
+        try {
+            val v = FlirManager.isPreferSdkRotation()
+            promise.resolve(v)
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_GET_ROTATION_PREF", e)
+        }
+    }
+
+    @ReactMethod
+    fun getBatteryLevel(promise: Promise) {
+        try {
+            val level = FlirManager.getBatteryLevel()
+            promise.resolve(level)
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_GET_BATTERY", e)
+        }
+    }
+
+    @ReactMethod
+    fun isBatteryCharging(promise: Promise) {
+        try {
+            val v = FlirManager.isBatteryCharging()
+            promise.resolve(v)
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_CHARGING", e)
         }
     }
     

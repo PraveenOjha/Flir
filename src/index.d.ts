@@ -35,9 +35,8 @@ export interface FlirDevice {
 
 export interface FlirModuleAPI {
     // Temperature APIs
-    getTemperatureFromColor(color: number): Promise<number>;
     getLatestFramePath(): Promise<string | null>;
-    getTemperatureAt(x: number, y: number): Promise<number>;
+    getTemperatureAt(x: number, y: number): Promise<number | null>;
     
     // Status APIs
     isEmulator(): Promise<boolean>;

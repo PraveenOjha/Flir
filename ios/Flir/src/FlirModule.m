@@ -77,6 +77,7 @@ RCT_EXPORT_MODULE(FlirModule);
         @"FlirFrameReceived",
         @"FlirError",
         @"FlirStateChanged"
+        , @"FlirBatteryUpdated"
     ];
 }
 
@@ -86,6 +87,15 @@ RCT_EXPORT_METHOD(addListener:(NSString *)eventName) {
 
 RCT_EXPORT_METHOD(removeListeners:(NSInteger)count) {
     // Required for RCTEventEmitter
+}
+
+// Provide a class helper so other native modules can post a battery update
++ (void)emitBatteryUpdateWithLevel:(NSInteger)level charging:(BOOL)charging {
+    NSDictionary *payload = @{
+        @"level": @(level),
+        @"isCharging": @(charging)
+    };
+    [[FlirEventEmitter shared] sendDeviceEvent:@"FlirBatteryUpdated" body:payload];
 }
 
 #pragma mark - Discovery Methods
@@ -334,10 +344,8 @@ RCT_EXPORT_METHOD(getTemperatureAt:(nonnull NSNumber *)x
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        double temp = [FlirState shared].lastTemperature;
-        if (isnan(temp)) {
-            temp = self.lastTemperature;
-        }
+        // Call into native FLIRManager to query temperature at point
+        double temp = [[FLIRManager shared] getTemperatureAtPoint:[x intValue] y:[y intValue]];
         if (isnan(temp)) {
             resolve([NSNull null]);
         } else {
@@ -346,17 +354,7 @@ RCT_EXPORT_METHOD(getTemperatureAt:(nonnull NSNumber *)x
     });
 }
 
-RCT_EXPORT_METHOD(getTemperatureFromColor:(NSInteger)color
-                  resolver:(RCTPromiseResolveBlock)resolve
-                  rejecter:(RCTPromiseRejectBlock)reject) {
-    // Placeholder: Convert ARGB color to pseudo-temperature
-    int r = (color >> 16) & 0xFF;
-    int g = (color >> 8) & 0xFF;
-    int b = color & 0xFF;
-    double lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    double temp = (lum / 255.0) * 400.0;
-    resolve(@(temp));
-}
+// Removed: getTemperatureFromColor - synthetic temperature generation not desirable; prefer SDK-provided temps
 
 #pragma mark - Status Methods
 
@@ -498,6 +496,51 @@ RCT_EXPORT_METHOD(getLatestFramePath:(RCTPromiseResolveBlock)resolve
                               [NSString stringWithFormat:@"flir_frame_%lld.jpg", (long long)[[NSDate date] timeIntervalSince1970] * 1000]];
         [jpegData writeToFile:tempPath atomically:YES];
         resolve(tempPath);
+    });
+}
+
+RCT_EXPORT_METHOD(getBatteryLevel:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        #if FLIR_SDK_AVAILABLE
+        int level = [[FLIRManager shared] getBatteryLevel];
+        resolve(@(level));
+        #else
+        resolve(@(-1));
+        #endif
+    });
+}
+
+RCT_EXPORT_METHOD(isBatteryCharging:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        #if FLIR_SDK_AVAILABLE
+        BOOL ch = [[FLIRManager shared] isBatteryCharging];
+        resolve(@(ch));
+        #else
+        resolve(@(NO));
+        #endif
+    });
+}
+
+RCT_EXPORT_METHOD(setPreferSdkRotation:(BOOL)prefer
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @try {
+            [[FLIRManager shared] setPreferSdkRotation:prefer];
+            resolve(@(YES));
+        } @catch (NSException *ex) {
+            reject(@"ERR_FLIR_SET_ROTATION_PREF", ex.reason, nil);
+        }
+    });
+}
+
+RCT_EXPORT_METHOD(isPreferSdkRotation:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        BOOL v = [[FLIRManager shared] isPreferSdkRotation];
+        resolve(@(v));
     });
 }
 
@@ -682,9 +725,23 @@ RCT_EXPORT_METHOD(getLatestFramePath:(RCTPromiseResolveBlock)resolve
     NSError *error = nil;
     if ([self.streamer update:&error]) {
         UIImage *image = [self.streamer getImage];
-        if (image) {
-            // Update shared state
-            [[FlirState shared] updateFrame:image];
+            if (image) {
+            // Update shared state and temperature data if provided by SDK
+            __block NSArray *tempData = nil;
+            [self.streamer withThermalImage:^(FLIRThermalImage *thermalImage) {
+                // Attempt to extract per-pixel measurements array from the thermal image
+                @try {
+                    id measurements = [thermalImage performSelector:NSSelectorFromString(@"measurements")];
+                    if (measurements && [measurements isKindOfClass:[NSArray class]]) {
+                        tempData = (NSArray *)measurements;
+                    }
+                } @catch (NSException *ex) {
+                    // Measurements not available on this SDK version - ignore
+                    tempData = nil;
+                }
+            }];
+            // Update shared state with temperature data (if any)
+            [[FlirState shared] updateFrame:image withTemperatureData:tempData];
             
             // Get temperature from thermal image if available
             [self.streamer withThermalImage:^(FLIRThermalImage *thermalImage) {

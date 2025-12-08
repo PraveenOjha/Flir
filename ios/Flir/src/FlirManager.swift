@@ -352,21 +352,13 @@ import ThermalSDK
     // MARK: - Temperature
     
     @objc public func getTemperatureAt(x: Int, y: Int) -> Double {
-#if FLIR_ENABLED
-        // Get temperature from thermal image at point
-        if let thermalStreamer = streamer {
-            var temp: Double = Double.nan
-            thermalStreamer.withThermalImage { thermalImage in
-                if let measurements = thermalImage.measurements {
-                    // Try to get temperature at point
-                    // For now, return the last known temperature
-                    temp = self.lastTemperature
-                }
-            }
-            return temp
+        // Try to read temperature from shared FlirState which is populated by the native streamer
+        // This avoids synthetic fallbacks and ensures SDK-provided temperature values are returned
+        if let state = FlirState.shared() {
+            let t = state.getTemperatureAt(x, y: y)
+            return t
         }
-#endif
-        return lastTemperature
+        return Double.nan
     }
     
     @objc public func getLastTemperature() -> Double {

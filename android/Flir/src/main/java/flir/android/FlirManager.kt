@@ -63,6 +63,23 @@ object FlirManager {
     }
     
     fun getLatestBitmap(): Bitmap? = latestBitmap
+
+    // Preference: ask SDK to deliver oriented/rotated frames (if SDK supports it)
+    fun setPreferSdkRotation(prefer: Boolean) {
+        sdkManager?.setPreferSdkRotation(prefer)
+    }
+
+    fun isPreferSdkRotation(): Boolean {
+        return sdkManager?.isPreferSdkRotation() ?: false
+    }
+
+    fun getBatteryLevel(): Int {
+        return sdkManager?.getBatteryLevel() ?: -1
+    }
+
+    fun isBatteryCharging(): Boolean {
+        return sdkManager?.isBatteryCharging() ?: false
+    }
     
     /**
      * Initialize the FLIR SDK
@@ -335,6 +352,11 @@ object FlirManager {
             Log.e(TAG, "Error: $message")
             emitError(message)
         }
+
+        override fun onBatteryUpdated(level: Int, isCharging: Boolean) {
+            Log.d(TAG, "onBatteryUpdated: level=$level charging=$isCharging")
+            emitBatteryState(level, isCharging)
+        }
     }
     
     // React Native event emitters
@@ -409,6 +431,24 @@ object FlirManager {
             Log.d(TAG, "Successfully emitted FlirDevicesFound")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to emit devices found", e)
+        }
+    }
+
+    private fun emitBatteryState(level: Int, isCharging: Boolean) {
+        val ctx = reactContext
+        if (ctx == null) {
+            Log.w(TAG, "Cannot emit FlirBatteryUpdated - reactContext is null!")
+            return
+        }
+        try {
+            val params = Arguments.createMap().apply {
+                putInt("level", level)
+                putBoolean("isCharging", isCharging)
+            }
+            ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit("FlirBatteryUpdated", params)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to emit battery state", e)
         }
     }
     

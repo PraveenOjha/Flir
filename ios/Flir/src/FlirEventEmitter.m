@@ -32,7 +32,7 @@ RCT_EXPORT_MODULE();
   return @[
     @"FlirDeviceConnected", @"FlirDeviceDisconnected", @"FlirDevicesFound",
     @"FlirFrameReceived", @"FlirFrame", @"FlirError", @"FlirStateChanged",
-    @"FlirTemperatureUpdate"
+    @"FlirTemperatureUpdate", @"FlirBatteryUpdated"
   ];
 }
 

@@ -118,6 +118,8 @@ cd ios
 pod install
 ```
 
+Note: If you installed `ilabs-flir` via npm, `Podfile` autolinking will declare the `Flir` pod for your app automatically. To avoid duplicates, the published npm package will not contain `Flir.podspec` or in-repo podspecs; they are excluded with `.npmignore`. See `docs/MIGRATION_TO_NPM.md` for migration details if you previously used an in-repo `Flir.podspec`.
+
 ##### Building Without FLIR SDK (No Paid License)
 
 If you don't have a paid FLIR developer license, you can build the app without the FLIR SDK. The module will provide fallback stub implementations:

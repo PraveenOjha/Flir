@@ -47,6 +47,10 @@ public class FlirSdkManager {
     private final Executor executor = Executors.newFixedThreadPool(2);
     // Single-threaded executor for frame processing to ensure ordered processing
     private final Executor frameExecutor = Executors.newSingleThreadExecutor();
+    // Battery poller scheduler - polls battery level & charging state periodically if supported
+    private final java.util.concurrent.ScheduledExecutorService batteryPoller = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+    private volatile int lastPolledBatteryLevel = -1;
+    private volatile boolean lastPolledCharging = false;
     // Frame processing guard - skip frames if still processing previous one
     private volatile boolean isProcessingFrame = false;
     private long lastFrameProcessedMs = 0;
@@ -59,6 +63,8 @@ public class FlirSdkManager {
     private ThermalStreamer streamer;
     private Stream activeStream;
     private final List<Identity> discoveredDevices = Collections.synchronizedList(new ArrayList<>());
+    // When true, prefer getting SDK-provided rotated frames instead of rotating ourselves
+    private volatile boolean preferSdkRotation = false;
     
     // Listener
     private Listener listener;
@@ -73,6 +79,7 @@ public class FlirSdkManager {
         void onDisconnected();
         void onFrame(Bitmap bitmap);
         void onError(String message);
+        void onBatteryUpdated(int level, boolean isCharging);
     }
     
     // Private constructor for singleton
@@ -96,6 +103,34 @@ public class FlirSdkManager {
     public void setListener(Listener listener) {
         this.listener = listener;
     }
+
+    public void setPreferSdkRotation(boolean prefer) {
+        this.preferSdkRotation = prefer;
+        // Try to ask SDK streamer to provide rotated images if possible
+        if (streamer != null) {
+            try {
+                // Try common method names via reflection to avoid hard dependency on exact API signature
+                Object obj = streamer;
+                java.lang.reflect.Method m = null;
+                try { m = obj.getClass().getMethod("setImageRotation", int.class); } catch (Throwable ignored) {}
+                if (m == null) {
+                    try { m = obj.getClass().getMethod("setRotation", int.class); } catch (Throwable ignored) {}
+                }
+                if (m != null) {
+                    // If caller asked SDK to rotate, choose 0 = 'auto' or prefer flag; here we request SDK to respect device orientation
+                    int degrees = prefer ? 0 : 0; // SDK-specific - for now, 0 requests orientation-respected frames if method interprets so
+                    m.invoke(obj, degrees);
+                    Log.d(TAG, "setPreferSdkRotation: requested SDK rotation via reflection");
+                } else {
+                    Log.w(TAG, "setPreferSdkRotation: SDK does not expose rotation API (reflection check)");
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "setPreferSdkRotation failed (reflection)", t);
+            }
+        }
+    }
+
+    public boolean isPreferSdkRotation() { return preferSdkRotation; }
     
     /**
      * Initialize the FLIR Thermal SDK
@@ -214,6 +249,8 @@ public class FlirSdkManager {
                 if (listener != null) {
                     listener.onConnected(identity);
                 }
+                // Start battery poller for continuous updates
+                startBatteryPoller();
             } catch (Exception e) {
                 Log.e(TAG, "Connection failed", e);
                 camera = null;
@@ -236,6 +273,8 @@ public class FlirSdkManager {
             }
             camera = null;
         }
+        // stop battery poller
+        stopBatteryPoller();
         
         if (listener != null) {
             listener.onDisconnected();
@@ -476,6 +515,67 @@ public class FlirSdkManager {
         }
         return names;
     }
+
+    /**
+     * Best-effort: Fetch battery level from connected camera if SDK exposes battery APIs
+     * Returns -1 if unavailable
+     */
+    public int getBatteryLevel() {
+        if (camera == null) return -1;
+        try {
+            // Common SDK methods to try
+            try {
+                java.lang.reflect.Method m = camera.getClass().getMethod("getBatteryLevel");
+                Object r = m.invoke(camera);
+                if (r instanceof Number) return ((Number) r).intValue();
+            } catch (Throwable ignored) {}
+
+            try {
+                java.lang.reflect.Method m = camera.getClass().getMethod("getBattery");
+                Object batt = m.invoke(camera);
+                if (batt != null) {
+                    try {
+                        java.lang.reflect.Method levelMethod = batt.getClass().getMethod("getLevel");
+                        Object lv = levelMethod.invoke(batt);
+                        if (lv instanceof Number) return ((Number) lv).intValue();
+                    } catch (Throwable ignored) {}
+                }
+            } catch (Throwable ignored) {}
+        } catch (Throwable t) {
+            Log.w(TAG, "Error querying battery level", t);
+        }
+        return -1;
+    }
+
+    /**
+     * Best-effort: Check if the camera is charging
+     * Returns false if unknown
+     */
+    public boolean isBatteryCharging() {
+        if (camera == null) return false;
+        try {
+            try {
+                java.lang.reflect.Method m = camera.getClass().getMethod("isCharging");
+                Object r = m.invoke(camera);
+                if (r instanceof Boolean) return (Boolean) r;
+            } catch (Throwable ignored) {}
+
+            try {
+                java.lang.reflect.Method m = camera.getClass().getMethod("getBattery");
+                Object batt = m.invoke(camera);
+                if (batt != null) {
+                    try {
+                        java.lang.reflect.Method isCh = batt.getClass().getMethod("isCharging");
+                        Object cv = isCh.invoke(batt);
+                        if (cv instanceof Boolean) return (Boolean) cv;
+                    } catch (Throwable ignored) {}
+                }
+            } catch (Throwable ignored) {}
+        } catch (Throwable t) {
+            Log.w(TAG, "Error querying battery charging state", t);
+        }
+        return false;
+    }
     
     // Find palette by name
     private Palette findPalette(String name) {
@@ -579,5 +679,40 @@ public class FlirSdkManager {
         listener = null;
         instance = null;
         Log.d(TAG, "Destroyed");
+    }
+
+    /**
+     * Start a background poller to periodically check battery state and notify listener
+     */
+    private void startBatteryPoller() {
+        try {
+            batteryPoller.scheduleAtFixedRate(() -> {
+                if (camera == null) return;
+                try {
+                    int level = getBatteryLevel();
+                    boolean charging = isBatteryCharging();
+                    if (level != lastPolledBatteryLevel || charging != lastPolledCharging) {
+                        lastPolledBatteryLevel = level;
+                        lastPolledCharging = charging;
+                        if (listener != null) {
+                            try { listener.onBatteryUpdated(level, charging);} catch (Throwable t) {}
+                        }
+                    }
+                } catch (Throwable t) {
+                    Log.w(TAG, "Battery poller error", t);
+                }
+            }, 0, 5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Throwable t) {
+            Log.w(TAG, "Failed to start battery poller", t);
+        }
+    }
+
+    /**
+     * Stop the battery poller.
+     */
+    private void stopBatteryPoller() {
+        try {
+            batteryPoller.shutdownNow();
+        } catch (Throwable ignored) {}
     }
 }
