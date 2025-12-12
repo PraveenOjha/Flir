@@ -19,8 +19,18 @@
 #define FLIR_SDK_AVAILABLE 0
 #endif
 
-// Forward declare Swift class
-@class FlirManager;
+// Declare minimal FLIRManager interface used by this module
+// The real implementation lives in ilabs.libs (FLIRManager.swift). We declare
+// the methods we call here to avoid compile-time errors when building this
+// bridge from a separate module.
+@interface FLIRManager : NSObject
++ (instancetype)shared;
+- (double)getTemperatureAtPoint:(int)x y:(int)y;
+- (int)getBatteryLevel;
+- (BOOL)isBatteryCharging;
+- (void)setPreferSdkRotation:(BOOL)prefer;
+- (BOOL)isPreferSdkRotation;
+@end
 
 @interface FlirModule() 
 #if FLIR_SDK_AVAILABLE
@@ -354,7 +364,17 @@ RCT_EXPORT_METHOD(getTemperatureAt:(nonnull NSNumber *)x
     });
 }
 
-// Removed: getTemperatureFromColor - synthetic temperature generation not desirable; prefer SDK-provided temps
+RCT_EXPORT_METHOD(getTemperatureFromColor:(NSInteger)color
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+    // Placeholder: Convert ARGB color to pseudo-temperature
+    int r = (color >> 16) & 0xFF;
+    int g = (color >> 8) & 0xFF;
+    int b = color & 0xFF;
+    double lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    double temp = (lum / 255.0) * 400.0;
+    resolve(@(temp));
+}
 
 #pragma mark - Status Methods
 
@@ -725,23 +745,9 @@ RCT_EXPORT_METHOD(isPreferSdkRotation:(RCTPromiseResolveBlock)resolve
     NSError *error = nil;
     if ([self.streamer update:&error]) {
         UIImage *image = [self.streamer getImage];
-            if (image) {
-            // Update shared state and temperature data if provided by SDK
-            __block NSArray *tempData = nil;
-            [self.streamer withThermalImage:^(FLIRThermalImage *thermalImage) {
-                // Attempt to extract per-pixel measurements array from the thermal image
-                @try {
-                    id measurements = [thermalImage performSelector:NSSelectorFromString(@"measurements")];
-                    if (measurements && [measurements isKindOfClass:[NSArray class]]) {
-                        tempData = (NSArray *)measurements;
-                    }
-                } @catch (NSException *ex) {
-                    // Measurements not available on this SDK version - ignore
-                    tempData = nil;
-                }
-            }];
-            // Update shared state with temperature data (if any)
-            [[FlirState shared] updateFrame:image withTemperatureData:tempData];
+        if (image) {
+            // Update shared state
+            [[FlirState shared] updateFrame:image];
             
             // Get temperature from thermal image if available
             [self.streamer withThermalImage:^(FLIRThermalImage *thermalImage) {
