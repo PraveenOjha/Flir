@@ -12,6 +12,7 @@
 #import <React/RCTLog.h>
 #import <React/RCTBridge.h>
 #import <objc/message.h>
+#import <objc/runtime.h>
 
 #if __has_include(<ThermalSDK/ThermalSDK.h>)
 #define FLIR_SDK_AVAILABLE 1
@@ -796,7 +797,13 @@ RCT_EXPORT_METHOD(isPreferSdkRotation:(RCTPromiseResolveBlock)resolve
             
             // Get temperature from thermal image if available
             [self.streamer withThermalImage:^(FLIRThermalImage *thermalImage) {
-                FLIRImageStatistics *stats = [thermalImage getStatistics];
+                // Some SDK versions call getImageStatistics(), try both selectors
+                FLIRImageStatistics *stats = nil;
+                if ([thermalImage respondsToSelector:sel_registerName("getImageStatistics")]) {
+                    stats = ((id (*)(id, SEL))objc_msgSend)((id)thermalImage, sel_registerName("getImageStatistics"));
+                } else if ([thermalImage respondsToSelector:sel_registerName("getStatistics")]) {
+                    stats = ((id (*)(id, SEL))objc_msgSend)((id)thermalImage, sel_registerName("getStatistics"));
+                }
                 if (stats) {
                     self.lastTemperature = [[stats getMax] value];
                     [FlirState shared].lastTemperature = self.lastTemperature;

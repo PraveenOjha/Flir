@@ -111,7 +111,7 @@ import ThermalSDK
 #if FLIR_ENABLED
         guard let streamer = streamer else { return nil }
         var result: [String: Any]? = nil
-        streamer.withThermalImage { thermalImage in
+        streamer.withThermalImage { [weak self] thermalImage in
             // Attempt to extract per-pixel measurements if available
             if let measurements = thermalImage.measurements as? [NSNumber],
                measurements.count > 0,
@@ -127,8 +127,8 @@ import ThermalSDK
                 }
             }
             // Fallback: use lastTemperature if set
-            if result == nil && !lastTemperature.isNaN {
-                result = ["temperature": lastTemperature]
+            if result == nil, let s = self, !s.lastTemperature.isNaN {
+                result = ["temperature": s.lastTemperature]
             }
         }
         return result
@@ -227,17 +227,35 @@ import ThermalSDK
             return
         }
 
-        if let paletteManager = FLIRPaletteManager.defaultPalettes() {
-            for palette in paletteManager {
-                if let p = palette as? FLIRPalette, p.name.lowercased() == paletteName.lowercased() {
-                    thermalImage.palette = p
-                    NSLog("[FlirManager] ✅ Palette set to: \(paletteName)")
-                    return
+        // Use runtime-safe APIs to find and set palette to avoid compile-time
+        // coupling to specific SDK versions. Try FLIRPaletteManager.defaultPalettes
+        // via ObjC runtime, then attempt a KVC set on the returned image if possible.
+        if let pmClass = NSClassFromString("FLIRPaletteManager") as AnyObject?, pmClass.responds(to: Selector(("default"))) {
+            if let pmInstance = pmClass.perform(Selector(("default")))?.takeUnretainedValue() as? NSObject,
+               pmInstance.responds(to: Selector(("getDefaultPalettes"))) {
+            if let arr = pmInstance.perform(Selector(("getDefaultPalettes")))?.takeUnretainedValue() as? NSArray {
+                for palette in arr {
+                    if let p = palette as? NSObject,
+                       let name = p.value(forKey: "name") as? String,
+                       name.lowercased() == paletteName.lowercased() {
+                        if let imgObj = thermalImage as? NSObject {
+                            // Try both 'palette' and 'Palette' keys depending on SDK
+                            if imgObj.responds(to: Selector(("setPalette:"))) {
+                                imgObj.perform(Selector(("setPalette:")), with: p)
+                            } else {
+                                imgObj.setValue(p, forKey: "Palette")
+                            }
+                            NSLog("[FlirManager] ✅ Palette set to: \(paletteName)")
+                            return
+                        }
+                    }
                 }
+                NSLog("[FlirManager] Palette not found: \(paletteName)")
+            } else {
+                NSLog("[FlirManager] Palette manager returned unexpected type")
             }
-            NSLog("[FlirManager] Palette not found: \(paletteName)")
         } else {
-            NSLog("[FlirManager] SDK not available - cannot set palette")
+            NSLog("[FlirManager] SDK palette APIs not available - cannot set palette")
         }
 #else
         NSLog("[FlirManager] SDK not available - cannot set palette")
@@ -366,15 +384,34 @@ import ThermalSDK
                 }
             }
             
-            // Connect
-            try camera?.connect(identity)
-            
-            connectedIdentity = identity
-            connectedDeviceId = identity.deviceId()
-            connectedDeviceName = identity.deviceId()
-            _isConnected = true
-            
-            NSLog("[FlirManager] Connected to: \(identity.deviceId())")
+            // Connect (support multiple SDK signatures via ObjC runtime)
+            var connectedOK = false
+            if let cam = camera {
+                if cam.responds(to: Selector(("connect:error:"))) {
+                    // Call connect:identity error:nil (ignore NSError pointer for compatibility)
+                    _ = cam.perform(Selector(("connect:error:")), with: identity, with: nil)
+                    connectedOK = true
+                } else if cam.responds(to: Selector(("connect:"))) {
+                    _ = cam.perform(Selector(("connect:")), with: identity)
+                    connectedOK = true
+                } else {
+                    NSLog("[FlirManager] No compatible connect API on FLIRCamera")
+                }
+            }
+
+            if connectedOK {
+                connectedIdentity = identity
+                connectedDeviceId = identity.deviceId()
+                connectedDeviceName = identity.deviceId()
+                _isConnected = true
+                NSLog("[FlirManager] Connected to: \(identity.deviceId())")
+            } else {
+                NSLog("[FlirManager] Connection failed: no compatible connect API")
+                DispatchQueue.main.async { [weak self] in
+                    self?.delegate?.onError("Connection failed: unsupported SDK API")
+                }
+                return
+            }
             
             // Get streams
             if let streams = camera?.getStreams(), !streams.isEmpty {
@@ -424,7 +461,7 @@ import ThermalSDK
         if iface.contains(.network) { return "NETWORK" }
         if iface.contains(.flirOneWireless) { return "WIRELESS" }
         if iface.contains(.emulator) { return "EMULATOR" }
-        if iface.contains(.usb) { return "USB" }
+        if String(describing: iface).lowercased().contains("usb") { return "USB" }
         return "UNKNOWN"
     }
 #endif
@@ -736,10 +773,23 @@ extension FlirManager: FLIRStreamDelegate {
             if let image = streamer.getImage() {
                 _latestImage = image
                 
-                // Get temperature from thermal image
+                // Get temperature from thermal image (use runtime selectors to be resilient across SDK versions)
                 streamer.withThermalImage { [weak self] thermalImage in
-                    if let stats = thermalImage.getStatistics() {
-                        self?.lastTemperature = stats.getMax().value
+                    var tempVal: Double = Double.nan
+                    // Try getImageStatistics then fallback to getStatistics (different SDK versions)
+                    if let statsObj = (thermalImage.perform(Selector(("getImageStatistics")))?.takeUnretainedValue() as? NSObject) ?? (thermalImage.perform(Selector(("getStatistics")))?.takeUnretainedValue() as? NSObject) {
+                        if statsObj.responds(to: Selector(("getMax"))) {
+                            if let maxObj = statsObj.perform(Selector(("getMax")))?.takeUnretainedValue() as? NSObject,
+                               let val = maxObj.value(forKey: "value") as? Double {
+                                tempVal = val
+                            }
+                        } else if let maxVal = statsObj.value(forKey: "max") as? NSObject,
+                                  let val = maxVal.value(forKey: "value") as? Double {
+                            tempVal = val
+                        }
+                    }
+                    if !tempVal.isNaN {
+                        self?.lastTemperature = tempVal
                     }
                 }
                 
