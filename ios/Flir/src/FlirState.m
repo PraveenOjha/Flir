@@ -48,8 +48,11 @@ static FlirState *_sharedState = nil;
 - (double)getTemperatureAt:(int)x y:(int)y {
   // First try the temperature data array if available
   double t = [self queryTemperatureAtPoint:x y:y];
-  // Return NaN if unavailable — do not fall back to last sampled temperature
-  return t;
+  if (!isnan(t)) {
+    return t;
+  }
+  // Fall back to last sampled temperature
+  return self.lastTemperature;
 }
 
 - (double)queryTemperatureAtPoint:(int)x y:(int)y {

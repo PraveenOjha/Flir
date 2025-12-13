@@ -11,6 +11,7 @@
 #import "FlirState.h"
 #import <React/RCTLog.h>
 #import <React/RCTBridge.h>
+#import <objc/message.h>
 
 #if __has_include(<ThermalSDK/ThermalSDK.h>)
 #define FLIR_SDK_AVAILABLE 1
@@ -19,18 +20,62 @@
 #define FLIR_SDK_AVAILABLE 0
 #endif
 
-// Declare minimal FLIRManager interface used by this module
-// The real implementation lives in ilabs.libs (FLIRManager.swift). We declare
-// the methods we call here to avoid compile-time errors when building this
-// bridge from a separate module.
-@interface FLIRManager : NSObject
-+ (instancetype)shared;
-- (double)getTemperatureAtPoint:(int)x y:(int)y;
-- (int)getBatteryLevel;
-- (BOOL)isBatteryCharging;
-- (void)setPreferSdkRotation:(BOOL)prefer;
-- (BOOL)isPreferSdkRotation;
-@end
+// Use runtime lookup to avoid a hard link-time dependency on `FLIRManager`.
+// This prevents duplicate-definition and missing-symbol build failures when
+// the Swift `FLIRManager` may or may not be available at build/link time.
+static id flir_manager_shared(void) {
+    Class cls = NSClassFromString(@"FLIRManager");
+    if (!cls) return nil;
+    SEL sel = sel_registerName("shared");
+    if (![cls respondsToSelector:sel]) return nil;
+    id (*msgSend0)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+    return msgSend0((id)cls, sel);
+}
+
+static double flir_getTemperatureAtPoint(int x, int y) {
+    id inst = flir_manager_shared();
+    if (!inst) return NAN;
+    SEL sel = sel_registerName("getTemperatureAtPoint:y:");
+    if (![inst respondsToSelector:sel]) return NAN;
+    double (*msgSend2)(id, SEL, int, int) = (double (*)(id, SEL, int, int))objc_msgSend;
+    return msgSend2(inst, sel, x, y);
+}
+
+static int flir_getBatteryLevel(void) {
+    id inst = flir_manager_shared();
+    if (!inst) return -1;
+    SEL sel = sel_registerName("getBatteryLevel");
+    if (![inst respondsToSelector:sel]) return -1;
+    int (*msgSend0)(id, SEL) = (int (*)(id, SEL))objc_msgSend;
+    return msgSend0(inst, sel);
+}
+
+static BOOL flir_isBatteryCharging(void) {
+    id inst = flir_manager_shared();
+    if (!inst) return NO;
+    SEL sel = sel_registerName("isBatteryCharging");
+    if (![inst respondsToSelector:sel]) return NO;
+    BOOL (*msgSend0)(id, SEL) = (BOOL (*)(id, SEL))objc_msgSend;
+    return msgSend0(inst, sel);
+}
+
+static void flir_setPreferSdkRotation(BOOL prefer) {
+    id inst = flir_manager_shared();
+    if (!inst) return;
+    SEL sel = sel_registerName("setPreferSdkRotation:");
+    if (![inst respondsToSelector:sel]) return;
+    void (*msgSend1)(id, SEL, BOOL) = (void (*)(id, SEL, BOOL))objc_msgSend;
+    msgSend1(inst, sel, prefer);
+}
+
+static BOOL flir_isPreferSdkRotation(void) {
+    id inst = flir_manager_shared();
+    if (!inst) return NO;
+    SEL sel = sel_registerName("isPreferSdkRotation");
+    if (![inst respondsToSelector:sel]) return NO;
+    BOOL (*msgSend0)(id, SEL) = (BOOL (*)(id, SEL))objc_msgSend;
+    return msgSend0(inst, sel);
+}
 
 @interface FlirModule() 
 #if FLIR_SDK_AVAILABLE
@@ -354,8 +399,8 @@ RCT_EXPORT_METHOD(getTemperatureAt:(nonnull NSNumber *)x
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        // Call into native FLIRManager to query temperature at point
-        double temp = [[FLIRManager shared] getTemperatureAtPoint:[x intValue] y:[y intValue]];
+        // Call into native FLIRManager to query temperature at point (runtime lookup)
+        double temp = flir_getTemperatureAtPoint([x intValue], [y intValue]);
         if (isnan(temp)) {
             resolve([NSNull null]);
         } else {
@@ -523,7 +568,7 @@ RCT_EXPORT_METHOD(getBatteryLevel:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
     dispatch_async(dispatch_get_main_queue(), ^{
         #if FLIR_SDK_AVAILABLE
-        int level = [[FLIRManager shared] getBatteryLevel];
+        int level = flir_getBatteryLevel();
         resolve(@(level));
         #else
         resolve(@(-1));
@@ -535,7 +580,7 @@ RCT_EXPORT_METHOD(isBatteryCharging:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
     dispatch_async(dispatch_get_main_queue(), ^{
         #if FLIR_SDK_AVAILABLE
-        BOOL ch = [[FLIRManager shared] isBatteryCharging];
+        BOOL ch = flir_isBatteryCharging();
         resolve(@(ch));
         #else
         resolve(@(NO));
@@ -547,8 +592,8 @@ RCT_EXPORT_METHOD(setPreferSdkRotation:(BOOL)prefer
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        @try {
-            [[FLIRManager shared] setPreferSdkRotation:prefer];
+            @try {
+            flir_setPreferSdkRotation(prefer);
             resolve(@(YES));
         } @catch (NSException *ex) {
             reject(@"ERR_FLIR_SET_ROTATION_PREF", ex.reason, nil);
@@ -559,7 +604,7 @@ RCT_EXPORT_METHOD(setPreferSdkRotation:(BOOL)prefer
 RCT_EXPORT_METHOD(isPreferSdkRotation:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        BOOL v = [[FLIRManager shared] isPreferSdkRotation];
+        BOOL v = flir_isPreferSdkRotation();
         resolve(@(v));
     });
 }
