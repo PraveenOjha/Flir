@@ -254,6 +254,7 @@ import ThermalSDK
             } else {
                 NSLog("[FlirManager] Palette manager returned unexpected type")
             }
+        }
         } else {
             NSLog("[FlirManager] SDK palette APIs not available - cannot set palette")
         }
