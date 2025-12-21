@@ -156,6 +156,39 @@ RCT_EXPORT_METHOD(removeListeners:(NSInteger)count) {
 
 #pragma mark - Discovery Methods
 
+// Network discovery on iOS 14+ requires Local Network privacy keys.
+// In USB/Bluetooth-only builds (or when the user denied permission), attempting
+// Bonjour discovery can fail noisily or crash depending on SDK internals.
+// We default to enabling network discovery only when the host app declares
+// NSLocalNetworkUsageDescription, and allow an explicit override via
+// setNetworkDiscoveryEnabled.
+- (BOOL)shouldEnableNetworkDiscovery {
+    // Explicit override if app sets it.
+    NSString *key = @"ilabsFlir.networkDiscoveryEnabled";
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if ([defaults objectForKey:key] != nil) {
+        return [defaults boolForKey:key];
+    }
+
+    // Safe default: require Local Network usage description to be present.
+    id desc = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"NSLocalNetworkUsageDescription"];
+    if ([desc isKindOfClass:[NSString class]] && ((NSString *)desc).length > 0) {
+        return YES;
+    }
+    return NO;
+}
+
+RCT_EXPORT_METHOD(setNetworkDiscoveryEnabled:(BOOL)enabled
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+#if FLIR_SDK_AVAILABLE
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:@"ilabsFlir.networkDiscoveryEnabled"];
+    resolve(@(YES));
+#else
+    resolve(@(YES));
+#endif
+}
+
 RCT_EXPORT_METHOD(startDiscovery:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
 #if FLIR_SDK_AVAILABLE
@@ -169,21 +202,70 @@ RCT_EXPORT_METHOD(startDiscovery:(RCTPromiseResolveBlock)resolve
         self.isScanning = YES;
         [self.discoveredDevices removeAllObjects];
         [self.identityMap removeAllObjects];
+
+        // Always expose emulator options to JS/UI so the user can connect even when
+        // physical devices are not present.
+        NSDictionary *emuOne = @{
+            @"id": @"emu:FLIR_ONE",
+            @"name": @"FLIR One Emulator",
+            @"communicationType": @"EMULATOR",
+            @"isEmulator": @(YES)
+        };
+        NSDictionary *emuEdge = @{
+            @"id": @"emu:FLIR_ONE_EDGE",
+            @"name": @"FLIR One Edge Emulator",
+            @"communicationType": @"EMULATOR",
+            @"isEmulator": @(YES)
+        };
+        [self.discoveredDevices addObjectsFromArray:@[ emuOne, emuEdge ]];
+
+        NSDictionary *initialDevicesBody = @{
+            @"devices": self.discoveredDevices,
+            @"count": @(self.discoveredDevices.count)
+        };
+        [[FlirEventEmitter shared] sendDeviceEvent:@"FlirDevicesFound" body:initialDevicesBody];
         
         if (!self.discovery) {
             self.discovery = [[FLIRDiscovery alloc] init];
             self.discovery.delegate = self;
         }
         
-        // Start discovery on all available interfaces
+        // Start discovery on allowed interfaces.
+        // Always include wired/BLE/emulator. Only include network when the app has
+        // Local Network usage description (or the app explicitly enabled it).
         FLIRCommunicationInterface interfaces = FLIRCommunicationInterfaceLightning |
-                                                 FLIRCommunicationInterfaceNetwork |
                                                  FLIRCommunicationInterfaceFlirOneWireless |
-                                                 FLIRCommunicationInterfaceEmulator;
+                                                 FLIRCommunicationInterfaceEmulator |
+                                                 FLIRCommunicationInterfaceUSB;
+        if ([self shouldEnableNetworkDiscovery]) {
+            interfaces |= FLIRCommunicationInterfaceNetwork;
+        } else {
+            RCTLogInfo(@"[FlirModule] Network discovery disabled (missing NSLocalNetworkUsageDescription or overridden)");
+        }
         [self.discovery start:interfaces];
         
         [self emitStateChange:@"discovering"];
         RCTLogInfo(@"[FlirModule] Discovery started");
+
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            __strong typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            if (!strongSelf.isScanning || strongSelf.isConnected) return;
+
+            BOOL hasRealDevice = NO;
+            for (NSDictionary *dev in strongSelf.discoveredDevices) {
+                NSString *did = dev[@"id"];
+                if (did.length > 0 && ![did hasPrefix:@"emu:"]) {
+                    hasRealDevice = YES;
+                    break;
+                }
+            }
+            if (!hasRealDevice) {
+                [strongSelf emitStateChange:@"no_device_found"];
+            }
+        });
+
         resolve(@(YES));
     });
 #else
@@ -219,6 +301,36 @@ RCT_EXPORT_METHOD(connectToDevice:(NSString *)deviceId
                   rejecter:(RCTPromiseRejectBlock)reject) {
 #if FLIR_SDK_AVAILABLE
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        // Synthetic emulator ids exposed during discovery.
+        if ([deviceId hasPrefix:@"emu:"]) {
+            NSString *typePart = [deviceId substringFromIndex:4];
+            FLIRCameraType cameraType = FLIRCameraType_flirOne;
+            if ([typePart.lowercaseString containsString:@"edge"]) {
+                cameraType = FLIRCameraType_flirOneEdge;
+            }
+
+            FLIRIdentity *emulatorIdentity = [[FLIRIdentity alloc] initWithEmulatorType:cameraType];
+            if (!emulatorIdentity) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    reject(@"ERR_EMULATOR_INIT", @"Failed to create emulator identity", nil);
+                });
+                return;
+            }
+
+            self.identityMap[[emulatorIdentity deviceId]] = emulatorIdentity;
+
+            [self performConnectionWithIdentity:emulatorIdentity completion:^(BOOL success, NSError *error) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (success) {
+                        resolve(@(YES));
+                    } else {
+                        reject(@"ERR_CONNECTION_FAILED", error.localizedDescription ?: @"Connection failed", error);
+                    }
+                });
+            }];
+            return;
+        }
+
         FLIRIdentity *identity = self.identityMap[deviceId];
         if (!identity) {
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -269,7 +381,15 @@ RCT_EXPORT_METHOD(connectToDevice:(NSString *)deviceId
     if (connected) {
         self.connectedIdentity = identity;
         self.connectedDeviceId = [identity deviceId];
-        self.connectedDeviceName = [identity deviceId];
+        NSString *displayName = [identity deviceId];
+        if ([identity communicationInterface] == FLIRCommunicationInterfaceEmulator) {
+            if ([identity cameraType] == FLIRCameraType_flirOneEdge || [identity cameraType] == FLIRCameraType_flirOneEdgePro) {
+                displayName = @"FLIR One Edge Emulator";
+            } else {
+                displayName = @"FLIR One Emulator";
+            }
+        }
+        self.connectedDeviceName = displayName;
         self.isConnected = YES;
         
         RCTLogInfo(@"[FlirModule] Connected to: %@", [identity deviceId]);
@@ -284,7 +404,6 @@ RCT_EXPORT_METHOD(connectToDevice:(NSString *)deviceId
         
         dispatch_async(dispatch_get_main_queue(), ^{
             [self emitDeviceConnected];
-            [self emitStateChange:@"connected"];
         });
         
         if (completion) completion(YES, nil);
@@ -613,23 +732,20 @@ RCT_EXPORT_METHOD(isPreferSdkRotation:(RCTPromiseResolveBlock)resolve
 #pragma mark - Helper Methods
 
 - (void)emitDeviceConnected {
-    BOOL isEmu = [self.connectedDeviceName.lowercaseString containsString:@"emulator"];
-    
-    NSDictionary *body = @{
-        @"identity": @{
-            @"deviceId": self.connectedDeviceId ?: @"Unknown",
-            @"isEmulator": @(isEmu)
-        },
-        @"deviceType": isEmu ? @"emulator" : @"device",
-        @"isEmulator": @(isEmu),
-        @"state": @"connected"
-    };
-    
-    [[FlirEventEmitter shared] sendDeviceEvent:@"FlirDeviceConnected" body:body];
+    [self emitStateChange:@"connected"];
 }
 
 - (void)emitStateChange:(NSString *)state {
-    BOOL isEmu = [self.connectedDeviceName.lowercaseString containsString:@"emulator"];
+    BOOL isEmu = NO;
+#if FLIR_SDK_AVAILABLE
+    if (self.connectedIdentity) {
+        isEmu = ([self.connectedIdentity communicationInterface] == FLIRCommunicationInterfaceEmulator);
+    } else {
+        isEmu = [self.connectedDeviceName.lowercaseString containsString:@"emulator"];
+    }
+#else
+    isEmu = [self.connectedDeviceName.lowercaseString containsString:@"emulator"];
+#endif
     
     NSDictionary *body = @{
         @"state": state,
@@ -637,9 +753,17 @@ RCT_EXPORT_METHOD(isPreferSdkRotation:(RCTPromiseResolveBlock)resolve
         @"isStreaming": @(self.isStreaming),
         @"isEmulator": @(isEmu),
         @"deviceName": self.connectedDeviceName ?: @"",
-        @"deviceId": self.connectedDeviceId ?: @""
+        @"deviceId": self.connectedDeviceId ?: @"",
+        @"identity": @{
+            @"deviceId": self.connectedDeviceId ?: @"",
+            @"isEmulator": @(isEmu)
+        }
     };
-    
+
+    // App JS listens for FlirDeviceConnected state transitions.
+    [[FlirEventEmitter shared] sendDeviceEvent:@"FlirDeviceConnected" body:body];
+
+    // Keep legacy event for backwards compatibility.
     [[FlirEventEmitter shared] sendDeviceEvent:@"FlirStateChanged" body:body];
 }
 
@@ -737,8 +861,15 @@ RCT_EXPORT_METHOD(isPreferSdkRotation:(RCTPromiseResolveBlock)resolve
 }
 
 - (void)discoveryError:(NSString *)error netServiceError:(int)nsnetserviceserror on:(FLIRCommunicationInterface)iface {
+    // Network discovery failures are expected when Local Network permission is missing/denied.
+    // Do not surface those as fatal errors; keep USB/BLE discovery running.
+    if ((iface & FLIRCommunicationInterfaceNetwork) == FLIRCommunicationInterfaceNetwork) {
+        RCTLogInfo(@"[FlirModule] Network discovery error (suppressed): %@ (%d)", error, nsnetserviceserror);
+        return;
+    }
+
     RCTLogError(@"[FlirModule] Discovery error: %@ (%d)", error, nsnetserviceserror);
-    
+
     dispatch_async(dispatch_get_main_queue(), ^{
         [[FlirEventEmitter shared] sendDeviceEvent:@"FlirError" body:@{
             @"error": error ?: @"Unknown discovery error",
