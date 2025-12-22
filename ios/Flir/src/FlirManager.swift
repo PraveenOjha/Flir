@@ -310,21 +310,55 @@ import ThermalSDK
             discovery?.delegate = self
         }
         
-        // Start discovery on all available interfaces
-        let interfaces: FLIRCommunicationInterface = [
+        // Build interfaces based on available permissions
+        // Always include Lightning, USB, Wireless BLE, and Emulator
+        var interfaces: FLIRCommunicationInterface = [
             .lightning,
-            .network,
             .flirOneWireless,
             .emulator
         ]
+        
+        // Only add network discovery if NSLocalNetworkUsageDescription is present
+        // This prevents crashes/errors when user doesn't have iOS developer registration
+        // or hasn't declared network permission
+        if shouldEnableNetworkDiscovery() {
+            interfaces.insert(.network)
+            NSLog("[FlirManager] Network discovery enabled (NSLocalNetworkUsageDescription present)")
+        } else {
+            NSLog("[FlirManager] Network discovery disabled (no NSLocalNetworkUsageDescription)")
+        }
+        
         discovery?.start(interfaces)
         
         emitStateChange("discovering")
-        NSLog("[FlirManager] Discovery started on interfaces: Lightning, Network, FlirOneWireless, Emulator")
+        NSLog("[FlirManager] Discovery started on interfaces: Lightning, \(interfaces.contains(.network) ? "Network, " : "")FlirOneWireless, Emulator")
 #else
         NSLog("[FlirManager] FLIR SDK not available - discovery disabled")
         delegate?.onError("FLIR SDK not available")
 #endif
+    }
+    
+    /// Check if network discovery should be enabled based on Info.plist permission
+    private func shouldEnableNetworkDiscovery() -> Bool {
+        // Check for explicit override first
+        let key = "ilabsFlir.networkDiscoveryEnabled"
+        if UserDefaults.standard.object(forKey: key) != nil {
+            return UserDefaults.standard.bool(forKey: key)
+        }
+        
+        // Safe default: require Local Network usage description to be present
+        if let desc = Bundle.main.object(forInfoDictionaryKey: "NSLocalNetworkUsageDescription") as? String,
+           !desc.isEmpty {
+            return true
+        }
+        
+        return false
+    }
+    
+    /// Allow explicit override of network discovery (called from React Native)
+    @objc public func setNetworkDiscoveryEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "ilabsFlir.networkDiscoveryEnabled")
+        NSLog("[FlirManager] Network discovery override set to: \(enabled)")
     }
     
     @objc public func stopDiscovery() {
@@ -366,64 +400,73 @@ import ThermalSDK
     }
     
     private func performConnection(identity: FLIRIdentity) {
+        // Use the proven connection pattern from FLIR SDK samples:
+        // FLIROneCameraSwift uses: pair(identity, code:) then connect()
+        
+        if camera == nil {
+            camera = FLIRCamera()
+            camera?.delegate = self
+        }
+        
+        guard let cam = camera else {
+            NSLog("[FlirManager] Failed to create FLIRCamera")
+            DispatchQueue.main.async { [weak self] in
+                self?.delegate?.onError("Failed to create camera instance")
+            }
+            return
+        }
+        
+        // Handle authentication for generic cameras (network cameras)
+        if identity.cameraType() == .generic {
+            let certName = getCertificateName()
+            var status = FLIRAuthenticationStatus.pending
+            while status == .pending {
+                status = cam.authenticate(identity, trustedConnectionName: certName)
+                if status == .pending {
+                    NSLog("[FlirManager] Waiting for camera authentication approval...")
+                    Thread.sleep(forTimeInterval: 1.0)
+                }
+            }
+            NSLog("[FlirManager] Authentication status: \(status.rawValue)")
+        }
+        
         do {
-            if camera == nil {
-                camera = FLIRCamera()
-                camera?.delegate = self
-            }
+            // Step 1: Pair with identity (required for FLIR One devices)
+            // The code parameter is for BLE pairing, 0 for direct connection
+            try cam.pair(identity, code: 0)
+            NSLog("[FlirManager] Paired with: \(identity.deviceId())")
             
-            // Handle authentication for generic cameras
-            if identity.cameraType() == .generic {
-                let certName = getCertificateName()
-                var status = FLIRAuthenticationStatus.pending
-                while status == .pending {
-                    status = camera!.authenticate(identity, trustedConnectionName: certName)
-                    if status == .pending {
-                        NSLog("[FlirManager] Waiting for camera authentication approval...")
-                        Thread.sleep(forTimeInterval: 1.0)
-                    }
-                }
-            }
+            // Step 2: Connect (no identity parameter - uses paired identity)
+            try cam.connect()
+            NSLog("[FlirManager] Connected to: \(identity.deviceId())")
             
-            // Connect (support multiple SDK signatures via ObjC runtime)
-            var connectedOK = false
-            if let cam = camera {
-                if cam.responds(to: Selector(("connect:error:"))) {
-                    // Call connect:identity error:nil (ignore NSError pointer for compatibility)
-                    _ = cam.perform(Selector(("connect:error:")), with: identity, with: nil)
-                    connectedOK = true
-                } else if cam.responds(to: Selector(("connect:"))) {
-                    _ = cam.perform(Selector(("connect:")), with: identity)
-                    connectedOK = true
-                } else {
-                    NSLog("[FlirManager] No compatible connect API on FLIRCamera")
-                }
-            }
-
-            if connectedOK {
-                connectedIdentity = identity
-                connectedDeviceId = identity.deviceId()
-                connectedDeviceName = identity.deviceId()
-                _isConnected = true
-                NSLog("[FlirManager] Connected to: \(identity.deviceId())")
-            } else {
-                NSLog("[FlirManager] Connection failed: no compatible connect API")
-                DispatchQueue.main.async { [weak self] in
-                    self?.delegate?.onError("Connection failed: unsupported SDK API")
-                }
-                return
+            // Update state
+            connectedIdentity = identity
+            connectedDeviceId = identity.deviceId()
+            connectedDeviceName = identity.deviceId()
+            _isConnected = true
+            
+            // Get camera info if available
+            if let remoteControl = cam.getRemoteControl(),
+               let cameraInfo = try? remoteControl.getCameraInformation() {
+                NSLog("[FlirManager] Camera info: \(cameraInfo)")
             }
             
             // Get streams
-            if let streams = camera?.getStreams(), !streams.isEmpty {
+            let streams = cam.getStreams()
+            if !streams.isEmpty {
                 NSLog("[FlirManager] Found \(streams.count) streams")
-                
-                // Auto-start first thermal stream
-                if let firstStream = streams.first {
-                    startStreamInternal(firstStream)
+
+                // Find and start the first thermal stream (preferred) or any stream
+                let thermalStream = streams.first { $0.isThermal } ?? streams.first
+                if let streamToStart = thermalStream {
+                    startStreamInternal(streamToStart)
                 }
+            } else {
+                NSLog("[FlirManager] No streams available on camera")
             }
             
+            // Notify delegate on main thread
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 let deviceInfo = FlirDeviceInfo(
@@ -437,7 +480,9 @@ import ThermalSDK
             }
             
         } catch {
-            NSLog("[FlirManager] Connection failed: \(error)")
+            NSLog("[FlirManager] Connection failed: \(error.localizedDescription)")
+            _isConnected = false
+            camera = nil
             DispatchQueue.main.async { [weak self] in
                 self?.delegate?.onError("Connection failed: \(error.localizedDescription)")
             }

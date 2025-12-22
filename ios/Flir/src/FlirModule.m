@@ -99,6 +99,11 @@ static BOOL flir_isPreferSdkRotation(void) {
 @property (nonatomic, copy) NSString *connectedDeviceId;
 @property (nonatomic, copy) NSString *connectedDeviceName;
 @property (nonatomic, assign) double lastTemperature;
+
+- (void)emitStateChange:(NSString *)state;
+- (void)emitDeviceConnected;
+- (void)stopStreamInternal;
+
 @end
 
 @implementation FlirModule
@@ -363,7 +368,7 @@ RCT_EXPORT_METHOD(connectToDevice:(NSString *)deviceId
     
     NSError *error = nil;
     
-    // Handle authentication for generic cameras
+    // Handle authentication for generic cameras (network cameras)
     if ([identity cameraType] == FLIRCameraType_generic) {
         NSString *certName = [self getCertificateName];
         FLIRAuthenticationStatus status = pending;
@@ -374,9 +379,39 @@ RCT_EXPORT_METHOD(connectToDevice:(NSString *)deviceId
                 [NSThread sleepForTimeInterval:1.0];
             }
         }
+        RCTLogInfo(@"[FlirModule] Authentication status: %d", (int)status);
     }
     
-    BOOL connected = [self.camera connect:identity error:&error];
+    // Step 1: Pair with camera (required for FLIR One devices)
+    @try {
+        if (![self.camera pair:identity code:0 error:&error]) {
+            RCTLogError(@"[FlirModule] Pair failed: %@", error.localizedDescription);
+            if (completion) completion(NO, error);
+            return;
+        }
+        RCTLogInfo(@"[FlirModule] Paired with: %@", [identity deviceId]);
+    } @catch (NSException *exception) {
+        RCTLogError(@"[FlirModule] Pair exception: %@", exception.reason);
+        NSError *pairError = [NSError errorWithDomain:@"FlirModule" code:1001 userInfo:@{NSLocalizedDescriptionKey: exception.reason ?: @"Pair failed"}];
+        if (completion) completion(NO, pairError);
+        return;
+    }
+    
+    // Step 2: Connect to camera
+    BOOL connected = NO;
+    @try {
+        if (![self.camera connect:&error]) {
+            RCTLogError(@"[FlirModule] Connect failed: %@", error.localizedDescription);
+            if (completion) completion(NO, error);
+            return;
+        }
+        connected = YES;
+        RCTLogInfo(@"[FlirModule] Connected to: %@", [identity deviceId]);
+    } @catch (NSException *exception) {
+        RCTLogError(@"[FlirModule] Connect exception: %@", exception.reason);
+        error = [NSError errorWithDomain:@"FlirModule" code:1002 userInfo:@{NSLocalizedDescriptionKey: exception.reason ?: @"Connect failed"}];
+        connected = NO;
+    }
     
     if (connected) {
         self.connectedIdentity = identity;
@@ -392,14 +427,25 @@ RCT_EXPORT_METHOD(connectToDevice:(NSString *)deviceId
         self.connectedDeviceName = displayName;
         self.isConnected = YES;
         
-        RCTLogInfo(@"[FlirModule] Connected to: %@", [identity deviceId]);
+        RCTLogInfo(@"[FlirModule] Successfully connected to: %@", displayName);
         
-        // Get available streams
+        // Get available streams and prefer thermal stream
         NSArray<FLIRStream *> *streams = [self.camera getStreams];
         if (streams.count > 0) {
-            RCTLogInfo(@"[FlirModule] Found %lu streams", (unsigned long)streams.count);
-            // Auto-start first stream
-            [self startStreamInternal:streams[0]];
+            RCTLogInfo(@"[FlirModule] Found %lu stream(s)", (unsigned long)streams.count);
+            
+            // Find thermal stream (preferred) or use first stream
+            FLIRStream *streamToStart = nil;
+            for (FLIRStream *stream in streams) {
+                if (stream.isThermal) {
+                    streamToStart = stream;
+                    break;
+                }
+            }
+            if (!streamToStart) {
+                streamToStart = streams[0];
+            }
+            [self startStreamInternal:streamToStart];
         }
         
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -409,9 +455,11 @@ RCT_EXPORT_METHOD(connectToDevice:(NSString *)deviceId
         if (completion) completion(YES, nil);
     } else {
         RCTLogError(@"[FlirModule] Connection failed: %@", error.localizedDescription);
+        self.camera = nil;
         if (completion) completion(NO, error);
     }
 }
+
 
 - (NSString *)getCertificateName {
     NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier] ?: @"com.flir.app";
@@ -492,16 +540,26 @@ RCT_EXPORT_METHOD(stopFlir:(RCTPromiseResolveBlock)resolve
     newStream.delegate = self;
     
     NSError *error = nil;
-    if ([newStream start:&error]) {
-        self.isStreaming = YES;
-        [self emitStateChange:@"streaming"];
-        RCTLogInfo(@"[FlirModule] Stream started (thermal: %@)", newStream.isThermal ? @"YES" : @"NO");
-    } else {
-        RCTLogError(@"[FlirModule] Stream start failed: %@", error.localizedDescription);
+    // Use try-catch pattern from samples
+    @try {
+        if (![newStream start:&error]) {
+            RCTLogError(@"[FlirModule] Stream start failed: %@", error.localizedDescription);
+            self.stream = nil;
+            self.streamer = nil;
+            [[FlirEventEmitter shared] sendDeviceEvent:@"FlirError" body:@{@"error": error.localizedDescription ?: @"Stream start failed"}];
+            return;
+        }
+    } @catch (NSException *exception) {
+        RCTLogError(@"[FlirModule] Stream start exception: %@", exception.reason);
         self.stream = nil;
         self.streamer = nil;
-        [[FlirEventEmitter shared] sendDeviceEvent:@"FlirError" body:@{@"error": error.localizedDescription ?: @"Stream start failed"}];
+        [[FlirEventEmitter shared] sendDeviceEvent:@"FlirError" body:@{@"error": exception.reason ?: @"Stream start exception"}];
+        return;
     }
+    
+    self.isStreaming = YES;
+    [self emitStateChange:@"streaming"];
+    RCTLogInfo(@"[FlirModule] Stream started (thermal: %@)", newStream.isThermal ? @"YES" : @"NO");
 }
 
 - (void)stopStreamInternal {
