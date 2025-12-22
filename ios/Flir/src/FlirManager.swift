@@ -819,6 +819,9 @@ extension FlirManager: FLIRStreamDelegate {
             if let image = streamer.getImage() {
                 _latestImage = image
                 
+                // Update shared state for native preview
+                FlirState.shared().updateFrame(image)
+
                 // Get temperature from thermal image (use runtime selectors to be resilient across SDK versions)
                 streamer.withThermalImage { [weak self] thermalImage in
                     var tempVal: Double = Double.nan
@@ -836,6 +839,7 @@ extension FlirManager: FLIRStreamDelegate {
                     }
                     if !tempVal.isNaN {
                         self?.lastTemperature = tempVal
+                        FlirState.shared().lastTemperature = tempVal
                     }
                 }
                 

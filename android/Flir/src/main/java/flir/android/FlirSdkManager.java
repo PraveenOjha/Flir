@@ -37,25 +37,28 @@ import java.util.concurrent.Executors;
  */
 public class FlirSdkManager {
     private static final String TAG = "FlirSdkManager";
-    
+
     // Singleton instance
     private static FlirSdkManager instance;
-    
+
     // Core components
     private final Context context;
-    // Use bounded thread pool to prevent thread explosion during rapid frame processing
+    // Use bounded thread pool to prevent thread explosion during rapid frame
+    // processing
     private final Executor executor = Executors.newFixedThreadPool(2);
     // Single-threaded executor for frame processing to ensure ordered processing
     private final Executor frameExecutor = Executors.newSingleThreadExecutor();
-    // Battery poller scheduler - polls battery level & charging state periodically if supported
-    private final java.util.concurrent.ScheduledExecutorService batteryPoller = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+    // Battery poller scheduler - polls battery level & charging state periodically
+    // if supported
+    private final java.util.concurrent.ScheduledExecutorService batteryPoller = java.util.concurrent.Executors
+            .newSingleThreadScheduledExecutor();
     private volatile int lastPolledBatteryLevel = -1;
     private volatile boolean lastPolledCharging = false;
     // Frame processing guard - skip frames if still processing previous one
     private volatile boolean isProcessingFrame = false;
     private long lastFrameProcessedMs = 0;
     private static final long MIN_FRAME_INTERVAL_MS = 50; // Max ~20 FPS frame processing
-    
+
     // State
     private boolean isInitialized = false;
     private boolean isScanning = false;
@@ -63,30 +66,37 @@ public class FlirSdkManager {
     private ThermalStreamer streamer;
     private Stream activeStream;
     private final List<Identity> discoveredDevices = Collections.synchronizedList(new ArrayList<>());
-    // When true, prefer getting SDK-provided rotated frames instead of rotating ourselves
+    // When true, prefer getting SDK-provided rotated frames instead of rotating
+    // ourselves
     private volatile boolean preferSdkRotation = false;
-    
+
     // Listener
     private Listener listener;
-    
+
     /**
      * Listener interface for SDK events
      */
     public interface Listener {
         void onDeviceFound(Identity identity);
+
         void onDeviceListUpdated(List<Identity> devices);
+
         void onConnected(Identity identity);
+
         void onDisconnected();
+
         void onFrame(Bitmap bitmap);
+
         void onError(String message);
+
         void onBatteryUpdated(int level, boolean isCharging);
     }
-    
+
     // Private constructor for singleton
     private FlirSdkManager(Context context) {
         this.context = context.getApplicationContext();
     }
-    
+
     /**
      * Get singleton instance
      */
@@ -96,7 +106,7 @@ public class FlirSdkManager {
         }
         return instance;
     }
-    
+
     /**
      * Set listener for SDK events
      */
@@ -109,16 +119,25 @@ public class FlirSdkManager {
         // Try to ask SDK streamer to provide rotated images if possible
         if (streamer != null) {
             try {
-                // Try common method names via reflection to avoid hard dependency on exact API signature
+                // Try common method names via reflection to avoid hard dependency on exact API
+                // signature
                 Object obj = streamer;
                 java.lang.reflect.Method m = null;
-                try { m = obj.getClass().getMethod("setImageRotation", int.class); } catch (Throwable ignored) {}
+                try {
+                    m = obj.getClass().getMethod("setImageRotation", int.class);
+                } catch (Throwable ignored) {
+                }
                 if (m == null) {
-                    try { m = obj.getClass().getMethod("setRotation", int.class); } catch (Throwable ignored) {}
+                    try {
+                        m = obj.getClass().getMethod("setRotation", int.class);
+                    } catch (Throwable ignored) {
+                    }
                 }
                 if (m != null) {
-                    // If caller asked SDK to rotate, choose 0 = 'auto' or prefer flag; here we request SDK to respect device orientation
-                    int degrees = prefer ? 0 : 0; // SDK-specific - for now, 0 requests orientation-respected frames if method interprets so
+                    // If caller asked SDK to rotate, choose 0 = 'auto' or prefer flag; here we
+                    // request SDK to respect device orientation
+                    int degrees = prefer ? 0 : 0; // SDK-specific - for now, 0 requests orientation-respected frames if
+                                                  // method interprets so
                     m.invoke(obj, degrees);
                     Log.d(TAG, "setPreferSdkRotation: requested SDK rotation via reflection");
                 } else {
@@ -130,8 +149,10 @@ public class FlirSdkManager {
         }
     }
 
-    public boolean isPreferSdkRotation() { return preferSdkRotation; }
-    
+    public boolean isPreferSdkRotation() {
+        return preferSdkRotation;
+    }
+
     /**
      * Initialize the FLIR Thermal SDK
      */
@@ -140,8 +161,18 @@ public class FlirSdkManager {
             Log.d(TAG, "Already initialized");
             return;
         }
-        
+
         try {
+            // Explicitly load native library to ensure it's available and initialized
+            // This can help resolve issues where the automatic loading fails or happens out
+            // of order
+            try {
+                System.loadLibrary("atlas_native");
+                Log.d(TAG, "Manually loaded atlas_native library");
+            } catch (Throwable t) {
+                Log.w(TAG, "Manual load of atlas_native failed: " + t.getMessage());
+            }
+
             ThermalSdkAndroid.init(context);
             isInitialized = true;
             Log.d(TAG, "SDK initialized successfully");
@@ -150,14 +181,14 @@ public class FlirSdkManager {
             notifyError("SDK initialization failed: " + e.getMessage());
         }
     }
-    
+
     /**
      * Check if SDK is initialized
      */
     public boolean isInitialized() {
         return isInitialized;
     }
-    
+
     /**
      * Start scanning for all device types (USB, Network, Emulator)
      * Returns ALL devices - no filtering
@@ -168,31 +199,30 @@ public class FlirSdkManager {
             notifyError("SDK not initialized");
             return;
         }
-        
+
         if (isScanning) {
             Log.d(TAG, "Already scanning");
             return;
         }
-        
+
         isScanning = true;
         discoveredDevices.clear();
-        
+
         Log.d(TAG, "Starting discovery for EMULATOR, NETWORK, USB...");
-        
+
         try {
             DiscoveryFactory.getInstance().scan(
-                discoveryListener,
-                CommunicationInterface.EMULATOR,
-                CommunicationInterface.NETWORK,
-                CommunicationInterface.USB
-            );
+                    discoveryListener,
+                    CommunicationInterface.EMULATOR,
+                    CommunicationInterface.NETWORK,
+                    CommunicationInterface.USB);
         } catch (Exception e) {
             Log.e(TAG, "Failed to start scan", e);
             isScanning = false;
             notifyError("Scan failed: " + e.getMessage());
         }
     }
-    
+
     /**
      * Stop scanning for devices
      */
@@ -200,28 +230,27 @@ public class FlirSdkManager {
         if (!isScanning) {
             return;
         }
-        
+
         try {
             DiscoveryFactory.getInstance().stop(
-                CommunicationInterface.EMULATOR,
-                CommunicationInterface.NETWORK,
-                CommunicationInterface.USB
-            );
+                    CommunicationInterface.EMULATOR,
+                    CommunicationInterface.NETWORK,
+                    CommunicationInterface.USB);
         } catch (Exception e) {
             Log.e(TAG, "Failed to stop scan", e);
         }
-        
+
         isScanning = false;
         Log.d(TAG, "Discovery stopped");
     }
-    
+
     /**
      * Get list of discovered devices
      */
     public List<Identity> getDiscoveredDevices() {
         return new ArrayList<>(discoveredDevices);
     }
-    
+
     /**
      * Connect to a device
      */
@@ -230,22 +259,22 @@ public class FlirSdkManager {
             notifyError("Invalid identity");
             return;
         }
-        
+
         // Disconnect if already connected
         if (camera != null) {
             disconnect();
         }
-        
+
         Log.d(TAG, "Connecting to: " + identity.deviceId);
-        
+
         // Run connection on background thread since it's blocking
         executor.execute(() -> {
             try {
                 camera = new Camera();
                 camera.connect(identity, connectionStatusListener, new ConnectParameters());
-                
+
                 Log.d(TAG, "Connected to camera");
-                
+
                 if (listener != null) {
                     listener.onConnected(identity);
                 }
@@ -258,13 +287,13 @@ public class FlirSdkManager {
             }
         });
     }
-    
+
     /**
      * Disconnect from current device
      */
     public void disconnect() {
         stopStream();
-        
+
         if (camera != null) {
             try {
                 camera.disconnect();
@@ -275,21 +304,21 @@ public class FlirSdkManager {
         }
         // stop battery poller
         stopBatteryPoller();
-        
+
         if (listener != null) {
             listener.onDisconnected();
         }
-        
+
         Log.d(TAG, "Disconnected");
     }
-    
+
     /**
      * Check if connected
      */
     public boolean isConnected() {
         return camera != null;
     }
-    
+
     /**
      * Start streaming from connected device
      */
@@ -298,7 +327,7 @@ public class FlirSdkManager {
             notifyError("Not connected");
             return;
         }
-        
+
         executor.execute(() -> {
             try {
                 // Get available streams
@@ -307,7 +336,7 @@ public class FlirSdkManager {
                     notifyError("No streams available");
                     return;
                 }
-                
+
                 // Find thermal stream
                 Stream thermalStream = null;
                 for (Stream stream : streams) {
@@ -316,68 +345,67 @@ public class FlirSdkManager {
                         break;
                     }
                 }
-                
+
                 if (thermalStream == null) {
                     thermalStream = streams.get(0);
                 }
-                
+
                 activeStream = thermalStream;
                 streamer = new ThermalStreamer(thermalStream);
-                
+
                 // Start receiving frames using OnReceived and OnRemoteError
                 thermalStream.start(
-                    (OnReceived<Void>) v -> {
-                        // FRAME DROP GUARD: Skip frame if still processing previous one
-                        // This prevents thread buildup and ensures smooth frame flow
-                        long now = System.currentTimeMillis();
-                        if (isProcessingFrame || (now - lastFrameProcessedMs < MIN_FRAME_INTERVAL_MS)) {
-                            // Drop frame - processing is behind or too soon since last frame
-                            return;
-                        }
-                        
-                        // Mark processing start before queuing task
-                        isProcessingFrame = true;
-                        
-                        // Use single-threaded frameExecutor to ensure ordered frame processing
-                        frameExecutor.execute(() -> {
-                            try {
-                                if (streamer != null) {
-                                    streamer.update();
-                                    
-                                    // Get ImageBuffer and convert to Bitmap
-                                    ImageBuffer imageBuffer = streamer.getImage();
-                                    if (imageBuffer != null && listener != null) {
-                                        BitmapAndroid bitmapAndroid = BitmapAndroid.createBitmap(imageBuffer);
-                                        Bitmap bitmap = bitmapAndroid.getBitMap();
-                                        if (bitmap != null) {
-                                            listener.onFrame(bitmap);
+                        (OnReceived<Void>) v -> {
+                            // FRAME DROP GUARD: Skip frame if still processing previous one
+                            // This prevents thread buildup and ensures smooth frame flow
+                            long now = System.currentTimeMillis();
+                            if (isProcessingFrame || (now - lastFrameProcessedMs < MIN_FRAME_INTERVAL_MS)) {
+                                // Drop frame - processing is behind or too soon since last frame
+                                return;
+                            }
+
+                            // Mark processing start before queuing task
+                            isProcessingFrame = true;
+
+                            // Use single-threaded frameExecutor to ensure ordered frame processing
+                            frameExecutor.execute(() -> {
+                                try {
+                                    if (streamer != null) {
+                                        streamer.update();
+
+                                        // Get ImageBuffer and convert to Bitmap
+                                        ImageBuffer imageBuffer = streamer.getImage();
+                                        if (imageBuffer != null && listener != null) {
+                                            BitmapAndroid bitmapAndroid = BitmapAndroid.createBitmap(imageBuffer);
+                                            Bitmap bitmap = bitmapAndroid.getBitMap();
+                                            if (bitmap != null) {
+                                                listener.onFrame(bitmap);
+                                            }
                                         }
                                     }
+                                } catch (Exception e) {
+                                    Log.e(TAG, "Error processing frame", e);
+                                } finally {
+                                    // Reset frame processing guard to allow next frame
+                                    lastFrameProcessedMs = System.currentTimeMillis();
+                                    isProcessingFrame = false;
                                 }
-                            } catch (Exception e) {
-                                Log.e(TAG, "Error processing frame", e);
-                            } finally {
-                                // Reset frame processing guard to allow next frame
-                                lastFrameProcessedMs = System.currentTimeMillis();
-                                isProcessingFrame = false;
-                            }
+                            });
+                        },
+                        error -> {
+                            Log.e(TAG, "Stream error: " + error);
+                            notifyError("Stream error: " + error);
                         });
-                    },
-                    error -> {
-                        Log.e(TAG, "Stream error: " + error);
-                        notifyError("Stream error: " + error);
-                    }
-                );
-                
+
                 Log.d(TAG, "Streaming started");
-                
+
             } catch (Exception e) {
                 Log.e(TAG, "Failed to start stream", e);
                 notifyError("Stream failed: " + e.getMessage());
             }
         });
     }
-    
+
     /**
      * Stop streaming
      */
@@ -390,19 +418,20 @@ public class FlirSdkManager {
             }
             activeStream = null;
         }
-        
+
         streamer = null;
-        
+
         // Reset frame processing state
         isProcessingFrame = false;
         lastFrameProcessedMs = 0;
-        
+
         Log.d(TAG, "Streaming stopped");
     }
-    
+
     /**
      * Get temperature at a specific point in the image
      * Queries the SDK directly - simple and no locks needed
+     * 
      * @param x X coordinate (0 to image width-1)
      * @param y Y coordinate (0 to image height-1)
      * @return Temperature in Celsius, or Double.NaN if not available
@@ -411,17 +440,17 @@ public class FlirSdkManager {
         if (streamer == null) {
             return Double.NaN;
         }
-        
-        final double[] result = {Double.NaN};
+
+        final double[] result = { Double.NaN };
         try {
             streamer.withThermalImage(thermalImage -> {
                 try {
                     int imgWidth = thermalImage.getWidth();
                     int imgHeight = thermalImage.getHeight();
-                    
+
                     int clampedX = Math.max(0, Math.min(imgWidth - 1, x));
                     int clampedY = Math.max(0, Math.min(imgHeight - 1, y));
-                    
+
                     ThermalValue value = thermalImage.getValueAt(new Point(clampedX, clampedY));
                     if (value != null) {
                         result[0] = value.asCelsius().value;
@@ -433,12 +462,13 @@ public class FlirSdkManager {
         } catch (Exception e) {
             Log.w(TAG, "Temperature query failed", e);
         }
-        
+
         return result[0];
     }
-    
+
     /**
      * Get temperature at normalized coordinates (0.0 to 1.0)
+     * 
      * @param normalizedX X coordinate (0.0 to 1.0)
      * @param normalizedY Y coordinate (0.0 to 1.0)
      * @return Temperature in Celsius, or Double.NaN if not available
@@ -447,20 +477,20 @@ public class FlirSdkManager {
         if (streamer == null) {
             return Double.NaN;
         }
-        
-        final double[] result = {Double.NaN};
+
+        final double[] result = { Double.NaN };
         try {
             streamer.withThermalImage(thermalImage -> {
                 try {
                     int width = thermalImage.getWidth();
                     int height = thermalImage.getHeight();
-                    
+
                     int x = (int) (normalizedX * (width - 1));
                     int y = (int) (normalizedY * (height - 1));
-                    
+
                     x = Math.max(0, Math.min(width - 1, x));
                     y = Math.max(0, Math.min(height - 1, y));
-                    
+
                     ThermalValue value = thermalImage.getValueAt(new Point(x, y));
                     if (value != null) {
                         result[0] = value.asCelsius().value;
@@ -472,10 +502,10 @@ public class FlirSdkManager {
         } catch (Exception e) {
             Log.w(TAG, "Temperature query failed", e);
         }
-        
+
         return result[0];
     }
-    
+
     /**
      * Set palette for thermal image rendering
      */
@@ -484,7 +514,7 @@ public class FlirSdkManager {
             Log.w(TAG, "No active streamer");
             return;
         }
-        
+
         executor.execute(() -> {
             try {
                 Palette palette = findPalette(paletteName);
@@ -499,7 +529,7 @@ public class FlirSdkManager {
             }
         });
     }
-    
+
     /**
      * Get list of available palettes
      */
@@ -517,18 +547,22 @@ public class FlirSdkManager {
     }
 
     /**
-     * Best-effort: Fetch battery level from connected camera if SDK exposes battery APIs
+     * Best-effort: Fetch battery level from connected camera if SDK exposes battery
+     * APIs
      * Returns -1 if unavailable
      */
     public int getBatteryLevel() {
-        if (camera == null) return -1;
+        if (camera == null)
+            return -1;
         try {
             // Common SDK methods to try
             try {
                 java.lang.reflect.Method m = camera.getClass().getMethod("getBatteryLevel");
                 Object r = m.invoke(camera);
-                if (r instanceof Number) return ((Number) r).intValue();
-            } catch (Throwable ignored) {}
+                if (r instanceof Number)
+                    return ((Number) r).intValue();
+            } catch (Throwable ignored) {
+            }
 
             try {
                 java.lang.reflect.Method m = camera.getClass().getMethod("getBattery");
@@ -537,10 +571,13 @@ public class FlirSdkManager {
                     try {
                         java.lang.reflect.Method levelMethod = batt.getClass().getMethod("getLevel");
                         Object lv = levelMethod.invoke(batt);
-                        if (lv instanceof Number) return ((Number) lv).intValue();
-                    } catch (Throwable ignored) {}
+                        if (lv instanceof Number)
+                            return ((Number) lv).intValue();
+                    } catch (Throwable ignored) {
+                    }
                 }
-            } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {
+            }
         } catch (Throwable t) {
             Log.w(TAG, "Error querying battery level", t);
         }
@@ -552,13 +589,16 @@ public class FlirSdkManager {
      * Returns false if unknown
      */
     public boolean isBatteryCharging() {
-        if (camera == null) return false;
+        if (camera == null)
+            return false;
         try {
             try {
                 java.lang.reflect.Method m = camera.getClass().getMethod("isCharging");
                 Object r = m.invoke(camera);
-                if (r instanceof Boolean) return (Boolean) r;
-            } catch (Throwable ignored) {}
+                if (r instanceof Boolean)
+                    return (Boolean) r;
+            } catch (Throwable ignored) {
+            }
 
             try {
                 java.lang.reflect.Method m = camera.getClass().getMethod("getBattery");
@@ -567,16 +607,19 @@ public class FlirSdkManager {
                     try {
                         java.lang.reflect.Method isCh = batt.getClass().getMethod("isCharging");
                         Object cv = isCh.invoke(batt);
-                        if (cv instanceof Boolean) return (Boolean) cv;
-                    } catch (Throwable ignored) {}
+                        if (cv instanceof Boolean)
+                            return (Boolean) cv;
+                    } catch (Throwable ignored) {
+                    }
                 }
-            } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {
+            }
         } catch (Throwable t) {
             Log.w(TAG, "Error querying battery charging state", t);
         }
         return false;
     }
-    
+
     // Find palette by name
     private Palette findPalette(String name) {
         try {
@@ -595,15 +638,15 @@ public class FlirSdkManager {
         }
         return null;
     }
-    
+
     // Discovery listener - no filtering, returns all devices
     private final DiscoveryEventListener discoveryListener = new DiscoveryEventListener() {
         @Override
         public void onCameraFound(DiscoveredCamera discoveredCamera) {
             Identity identity = discoveredCamera.getIdentity();
-            Log.d(TAG, "Device found: " + identity.deviceId + 
-                       " type=" + identity.communicationInterface);
-            
+            Log.d(TAG, "Device found: " + identity.deviceId +
+                    " type=" + identity.communicationInterface);
+
             // Add to list if not already present
             synchronized (discoveredDevices) {
                 boolean exists = false;
@@ -617,58 +660,58 @@ public class FlirSdkManager {
                     discoveredDevices.add(identity);
                 }
             }
-            
+
             if (listener != null) {
                 listener.onDeviceFound(identity);
                 listener.onDeviceListUpdated(new ArrayList<>(discoveredDevices));
             }
         }
-        
+
         @Override
         public void onCameraLost(Identity identity) {
             Log.d(TAG, "Device lost: " + identity.deviceId);
-            
+
             synchronized (discoveredDevices) {
                 discoveredDevices.removeIf(d -> d.deviceId.equals(identity.deviceId));
             }
-            
+
             if (listener != null) {
                 listener.onDeviceListUpdated(new ArrayList<>(discoveredDevices));
             }
         }
-        
+
         @Override
         public void onDiscoveryError(CommunicationInterface iface, ErrorCode error) {
             Log.e(TAG, "Discovery error: " + iface + " - " + error);
             notifyError("Discovery error: " + error);
         }
-        
+
         @Override
         public void onDiscoveryFinished(CommunicationInterface iface) {
             Log.d(TAG, "Discovery finished for: " + iface);
         }
     };
-    
+
     // Connection status listener
     private final ConnectionStatusListener connectionStatusListener = new ConnectionStatusListener() {
         @Override
         public void onDisconnected(ErrorCode error) {
             Log.d(TAG, "Disconnected: " + (error != null ? error : "clean"));
             camera = null;
-            
+
             if (listener != null) {
                 listener.onDisconnected();
             }
         }
     };
-    
+
     // Helper to notify errors
     private void notifyError(String message) {
         if (listener != null) {
             listener.onError(message);
         }
     }
-    
+
     /**
      * Cleanup resources
      */
@@ -682,12 +725,14 @@ public class FlirSdkManager {
     }
 
     /**
-     * Start a background poller to periodically check battery state and notify listener
+     * Start a background poller to periodically check battery state and notify
+     * listener
      */
     private void startBatteryPoller() {
         try {
             batteryPoller.scheduleAtFixedRate(() -> {
-                if (camera == null) return;
+                if (camera == null)
+                    return;
                 try {
                     int level = getBatteryLevel();
                     boolean charging = isBatteryCharging();
@@ -695,7 +740,10 @@ public class FlirSdkManager {
                         lastPolledBatteryLevel = level;
                         lastPolledCharging = charging;
                         if (listener != null) {
-                            try { listener.onBatteryUpdated(level, charging);} catch (Throwable t) {}
+                            try {
+                                listener.onBatteryUpdated(level, charging);
+                            } catch (Throwable t) {
+                            }
                         }
                     }
                 } catch (Throwable t) {
@@ -713,6 +761,7 @@ public class FlirSdkManager {
     private void stopBatteryPoller() {
         try {
             batteryPoller.shutdownNow();
-        } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {
+        }
     }
 }
