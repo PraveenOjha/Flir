@@ -33,6 +33,25 @@ Pod::Spec.new do |s|
   
   # React Native dependency
   s.dependency 'React-Core'
+
+  # Ensure React headers are available to this Pod across various RN/CocoaPods layouts
+  # (helps when headers are in different public/private/ReactCore locations or when using use_frameworks)
+  begin
+    existing = s.pod_target_xcconfig rescue {}
+  end
+  existing_hdrs = existing.is_a?(Hash) ? (existing['HEADER_SEARCH_PATHS'] || '$(inherited)') : '$(inherited)'
+  hdrs = [existing_hdrs,
+          '"${PODS_ROOT}/Headers/Public/React"',
+          '"${PODS_ROOT}/Headers/Public/React-Core"',
+          '"${PODS_ROOT}/Headers/Public/ReactCommon"',
+          '"${PODS_ROOT}/Headers/Public/React-CoreModules"'].join(' ')
+  begin
+    s.pod_target_xcconfig = (existing || {}).merge('HEADER_SEARCH_PATHS' => hdrs)
+  rescue NoMethodError
+    # Fallback for older CocoaPods that don't support pod_target_xcconfig
+    s.user_target_xcconfig = (s.user_target_xcconfig || {}).merge('HEADER_SEARCH_PATHS' => hdrs)
+  end
+  
   
   # ==========================================================================
   # FLIR SDK CONFIGURATION

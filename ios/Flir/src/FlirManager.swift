@@ -43,6 +43,7 @@ import ThermalSDK
     func onDeviceConnected(_ device: FlirDeviceInfo)
     func onDeviceDisconnected()
     func onFrameReceived(_ image: UIImage, width: Int, height: Int)
+    @objc optional func onFrameReceivedRaw(_ data: Data, width: Int, height: Int, bytesPerRow: Int, timestamp: Double)
     func onError(_ message: String)
     func onStateChanged(_ state: String, isConnected: Bool, isStreaming: Bool, isEmulator: Bool)
 }
@@ -186,6 +187,35 @@ import ThermalSDK
             return data.base64EncodedString()
         }
         return nil
+    }
+
+    // Returns a NSDictionary with BGRA base64 data for the latest frame.
+    // Keys: width (Int), height (Int), bytesPerRow (Int), dataBase64 (String)
+    @objc public func latestFrameBitmapBase64() -> NSDictionary? {
+        guard let img = latestImage else { return nil }
+        guard let bmp = convertUIImageToBGRA(img) else { return nil }
+        let b64 = bmp.data.base64EncodedString()
+        return ["width": bmp.width, "height": bmp.height, "bytesPerRow": bmp.bytesPerRow, "dataBase64": b64]
+    }
+
+    // Convert a UIImage to BGRA (kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst).
+    private func convertUIImageToBGRA(_ image: UIImage) -> (data: Data, width: Int, height: Int, bytesPerRow: Int)? {
+        guard let cg = image.cgImage else { return nil }
+        let width = cg.width
+        let height = cg.height
+        let bytesPerRow = width * 4
+        let size = height * bytesPerRow
+        var data = Data(count: size)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
+        let success = data.withUnsafeMutableBytes { (ptr: UnsafeMutableRawBufferPointer) -> Bool in
+            guard let base = ptr.baseAddress else { return false }
+            guard let ctx = CGContext(data: base, width: width, height: height, bitsPerComponent: 8, bytesPerRow: bytesPerRow, space: colorSpace, bitmapInfo: bitmapInfo) else { return false }
+            let rect = CGRect(x: 0, y: 0, width: width, height: height)
+            ctx.draw(cg, in: rect)
+            return true
+        }
+        return success ? (data, width, height, bytesPerRow) : nil
     }
 
     // Client lifecycle helpers: callers (UI/filters) can retain/release to ensure
@@ -850,6 +880,23 @@ extension FlirManager: FLIRStreamDelegate {
                         width: Int(image.size.width),
                         height: Int(image.size.height)
                     )
+                }
+
+                // Also provide a raw BGRA bitmap callback (optional) to delegates and a
+                // queryable base64 bitmap dict for RN consumers. Conversion is done
+                // off the main thread to avoid blocking UI.
+                DispatchQueue.global(qos: .utility).async { [weak self, weak image] in
+                    guard let self = self, let image = image else { return }
+                    if let bmp = self.convertUIImageToBGRA(image) {
+                        let ts = Date().timeIntervalSince1970 * 1000.0
+                        DispatchQueue.main.async {
+                            // Notify the delegate if set (may be FlirModule or another consumer)
+                            self.delegate?.onFrameReceivedRaw?(bmp.data, width: bmp.width, height: bmp.height, bytesPerRow: bmp.bytesPerRow, timestamp: ts)
+
+                            // Post a system notification so multiple native observers can react
+                            NotificationCenter.default.post(name: Notification.Name("FlirFrameBitmapAvailableNative"), object: nil, userInfo: ["width": bmp.width, "height": bmp.height, "bytesPerRow": bmp.bytesPerRow, "timestamp": ts])
+                        }
+                    }
                 }
             }
         } catch {

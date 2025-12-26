@@ -121,7 +121,7 @@ RCT_EXPORT_MODULE(FlirModule);
 - (NSArray<NSString *> *)supportedEvents {
   return @[
     @"FlirDeviceConnected", @"FlirDeviceDisconnected", @"FlirDevicesFound",
-    @"FlirFrameReceived", @"FlirError", @"FlirStateChanged",
+    @"FlirFrameReceived", @"FlirFrameBitmapAvailable", @"FlirError", @"FlirStateChanged",
     @"FlirBatteryUpdated"
   ];
 }
@@ -308,6 +308,22 @@ RCT_EXPORT_METHOD(isEmulator : (RCTPromiseResolveBlock)
   });
 }
 
+RCT_EXPORT_METHOD(getLatestFrameBitmap : (RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    id manager = flir_manager_shared();
+    if (!manager || ![manager respondsToSelector:sel_registerName("latestFrameBitmapBase64")]) {
+      resolve([NSNull null]);
+      return;
+    }
+    NSDictionary *dict = ((NSDictionary * (*)(id, SEL)) objc_msgSend)(manager, sel_registerName("latestFrameBitmapBase64"));
+    if (!dict) {
+      resolve([NSNull null]);
+    } else {
+      resolve(dict);
+    }
+  });
+}
+
 RCT_EXPORT_METHOD(isDeviceConnected : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -429,6 +445,16 @@ RCT_EXPORT_METHOD(isPreferSdkRotation : (RCTPromiseResolveBlock)
                    @"timestamp" :
                        @([[NSDate date] timeIntervalSince1970] * 1000)
                  }];
+}
+
+- (void)onFrameReceivedRaw:(NSData *)data width:(NSInteger)width height:(NSInteger)height bytesPerRow:(NSInteger)bytesPerRow timestamp:(double)timestamp {
+  // Emit a lightweight event to notify JS that a raw bitmap is available; raw bytes are available via getLatestFrameBitmap()
+  [[FlirEventEmitter shared] sendDeviceEvent:@"FlirFrameBitmapAvailable" body:@{
+    @"width": @(width),
+    @"height": @(height),
+    @"bytesPerRow": @(bytesPerRow),
+    @"timestamp": @(timestamp)
+  }];
 }
 
 - (void)onError:(NSString *)message {

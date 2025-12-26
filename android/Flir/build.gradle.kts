@@ -38,7 +38,7 @@ android {
 
 dependencies {
     // React Native
-    implementation("com.facebook.react:react-native:+")
+    implementation("com.facebook.react:react-native:+")66a6f83912ba50ae5553aff1f5b0
     
     // Kotlin coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
