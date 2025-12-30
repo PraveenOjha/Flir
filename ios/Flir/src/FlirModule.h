@@ -5,12 +5,19 @@
 //  React Native bridge module for FLIR thermal camera SDK
 //
 
+// Prefer React/ headers, but fall back to ReactCore or local headers for different RN layouts
 #if __has_include(<React/RCTBridgeModule.h>)
 #import <React/RCTBridgeModule.h>
+#if __has_include(<React/RCTEventEmitter.h>)
 #import <React/RCTEventEmitter.h>
+#endif
 #elif __has_include(<ReactCore/RCTBridgeModule.h>)
 #import <ReactCore/RCTBridgeModule.h>
+#if __has_include(<ReactCore/RCTEventEmitter.h>)
+#import <ReactCore/RCTEventEmitter.h>
+#elif __has_include(<React/RCTEventEmitter.h>)
 #import <React/RCTEventEmitter.h>
+#endif
 #elif __has_include("RCTBridgeModule.h")
 #import "RCTBridgeModule.h"
 #import "RCTEventEmitter.h"

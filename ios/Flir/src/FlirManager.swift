@@ -97,6 +97,17 @@ import ThermalSDK
                connectedDeviceName?.lowercased().contains("emulat") == true
     }
     
+    // Preference: ask SDK to deliver oriented/rotated frames (if SDK supports it)
+    private var _preferSdkRotation: Bool = false
+    
+    @objc public func setPreferSdkRotation(_ prefer: Bool) {
+        _preferSdkRotation = prefer
+    }
+    
+    @objc public func isPreferSdkRotation() -> Bool {
+        return _preferSdkRotation
+    }
+    
     @objc public func getConnectedDeviceInfo() -> String {
         return connectedDeviceName ?? "Not connected"
     }
