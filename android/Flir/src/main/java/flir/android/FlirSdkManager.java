@@ -175,9 +175,9 @@ public class FlirSdkManager {
 
             ThermalSdkAndroid.init(context);
             isInitialized = true;
-            Log.d(TAG, "SDK initialized successfully");
+            Log.d(TAG, "[Flir-LOAD] SDK initialized successfully");
         } catch (Exception e) {
-            Log.e(TAG, "Failed to initialize SDK", e);
+            Log.e(TAG, "[Flir-ERROR] Failed to initialize SDK", e);
             notifyError("SDK initialization failed: " + e.getMessage());
         }
     }
@@ -208,7 +208,7 @@ public class FlirSdkManager {
         isScanning = true;
         discoveredDevices.clear();
 
-        Log.d(TAG, "Starting discovery for EMULATOR, NETWORK, USB...");
+        Log.d(TAG, "[Flir-DISCOVERY] Starting discovery for EMULATOR, NETWORK, USB...");
 
         try {
             DiscoveryFactory.getInstance().scan(
@@ -241,7 +241,7 @@ public class FlirSdkManager {
         }
 
         isScanning = false;
-        Log.d(TAG, "Discovery stopped");
+        Log.d(TAG, "[Flir-DISCOVERY] Discovery stopped");
     }
 
     /**
@@ -273,7 +273,7 @@ public class FlirSdkManager {
                 camera = new Camera();
                 camera.connect(identity, connectionStatusListener, new ConnectParameters());
 
-                Log.d(TAG, "Connected to camera");
+                Log.d(TAG, "[Flir-CONNECTION] Connected to camera: " + identity.deviceId);
 
                 if (listener != null) {
                     listener.onConnected(identity);
@@ -309,7 +309,7 @@ public class FlirSdkManager {
             listener.onDisconnected();
         }
 
-        Log.d(TAG, "Disconnected");
+        Log.d(TAG, "[Flir-DISCONNECT] Disconnected");
     }
 
     /**
@@ -397,10 +397,10 @@ public class FlirSdkManager {
                             notifyError("Stream error: " + error);
                         });
 
-                Log.d(TAG, "Streaming started");
+                Log.d(TAG, "[Flir-STREAMING] Streaming started");
 
             } catch (Exception e) {
-                Log.e(TAG, "Failed to start stream", e);
+                Log.e(TAG, "[Flir-ERROR] Failed to start stream", e);
                 notifyError("Stream failed: " + e.getMessage());
             }
         });
@@ -425,7 +425,7 @@ public class FlirSdkManager {
         isProcessingFrame = false;
         lastFrameProcessedMs = 0;
 
-        Log.d(TAG, "Streaming stopped");
+        Log.d(TAG, "[Flir-STREAMING] Streaming stopped");
     }
 
     /**
@@ -522,12 +522,13 @@ public class FlirSdkManager {
                     streamer.withThermalImage(thermalImage -> {
                         thermalImage.setPalette(palette);
                     });
-                    Log.d(TAG, "Palette set to: " + paletteName);
+                    Log.d(TAG, "[Flir-STREAMING] Palette set to: " + paletteName);
                 }
             } catch (Exception e) {
                 Log.e(TAG, "Error setting palette", e);
             }
         });
+
     }
 
     /**
@@ -644,8 +645,8 @@ public class FlirSdkManager {
         @Override
         public void onCameraFound(DiscoveredCamera discoveredCamera) {
             Identity identity = discoveredCamera.getIdentity();
-            Log.d(TAG, "Device found: " + identity.deviceId +
-                    " type=" + identity.communicationInterface);
+            Log.d(TAG,
+                    "[Flir-DISCOVERY] Device found: " + identity.deviceId + " type=" + identity.communicationInterface);
 
             // Add to list if not already present
             synchronized (discoveredDevices) {
@@ -669,7 +670,7 @@ public class FlirSdkManager {
 
         @Override
         public void onCameraLost(Identity identity) {
-            Log.d(TAG, "Device lost: " + identity.deviceId);
+            Log.d(TAG, "[Flir-DISCOVERY] Device lost: " + identity.deviceId);
 
             synchronized (discoveredDevices) {
                 discoveredDevices.removeIf(d -> d.deviceId.equals(identity.deviceId));
@@ -682,13 +683,13 @@ public class FlirSdkManager {
 
         @Override
         public void onDiscoveryError(CommunicationInterface iface, ErrorCode error) {
-            Log.e(TAG, "Discovery error: " + iface + " - " + error);
+            Log.e(TAG, "[Flir-ERROR] Discovery error: " + iface + " - " + error);
             notifyError("Discovery error: " + error);
         }
 
         @Override
         public void onDiscoveryFinished(CommunicationInterface iface) {
-            Log.d(TAG, "Discovery finished for: " + iface);
+            Log.d(TAG, "[Flir-DISCOVERY] Discovery finished for: " + iface);
         }
     };
 
@@ -739,6 +740,9 @@ public class FlirSdkManager {
                     if (level != lastPolledBatteryLevel || charging != lastPolledCharging) {
                         lastPolledBatteryLevel = level;
                         lastPolledCharging = charging;
+
+                        Log.d(TAG, String.format("[Flir-BATTERY] Level: %d%%, Charging: %b", level, charging));
+
                         if (listener != null) {
                             try {
                                 listener.onBatteryUpdated(level, charging);

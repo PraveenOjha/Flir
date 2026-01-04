@@ -88,14 +88,14 @@ object FlirManager {
         // Store react context for event emission if it's a React context
         // Always update if we get a valid ReactContext (in case previous was stale)
         if (context is ReactContext) {
-            Log.d(TAG, "Storing ReactContext for event emission: ${context.javaClass.simpleName}")
+            Log.d(TAG, "[Flir-BRIDGE-LOAD] Storing ReactContext for event emission: ${context.javaClass.simpleName}")
             reactContext = context
         } else {
-            Log.d(TAG, "Context is not ReactContext: ${context.javaClass.simpleName}")
+            Log.d(TAG, "[Flir-BRIDGE-LOAD] Context is not ReactContext: ${context.javaClass.simpleName}")
         }
         
         if (isInitialized) {
-            Log.d(TAG, "Already initialized")
+            Log.d(TAG, "[Flir-BRIDGE-LOAD] Already initialized")
             return
         }
         
@@ -106,14 +106,14 @@ object FlirManager {
         sdkManager?.initialize()
         
         isInitialized = true
-        Log.i(TAG, "FlirManager initialized")
+        Log.i(TAG, "[Flir-BRIDGE-LOAD] FlirManager initialized")
     }
     
     /**
      * Start scanning for devices (USB, Network, Emulator - ALL types)
      */
     fun startDiscovery(retry: Boolean = false) {
-        Log.i(TAG, "startDiscovery(retry=$retry)")
+        Log.i(TAG, "[Flir-BRIDGE-DISCOVERY] startDiscovery(retry=$retry)")
         
         if (!isInitialized && appContext != null) {
             init(appContext!!)
@@ -141,7 +141,7 @@ object FlirManager {
      * Stop scanning
      */
     fun stopDiscovery() {
-        Log.i(TAG, "stopDiscovery")
+        Log.i(TAG, "[Flir-BRIDGE-DISCOVERY] stopDiscovery")
         sdkManager?.stop()
         isScanning = false
     }
@@ -156,9 +156,10 @@ object FlirManager {
         val identity = devices.find { it.deviceId == deviceId }
         
         if (identity != null) {
+            Log.i(TAG, "[Flir-BRIDGE-CONNECTION] Connecting to found device: $deviceId")
             sdkManager?.connect(identity)
         } else {
-            Log.e(TAG, "Device not found: $deviceId")
+            Log.e(TAG, "[Flir-BRIDGE-ERROR] Device not found: $deviceId")
             emitError("Device not found: $deviceId")
         }
     }
@@ -191,7 +192,7 @@ object FlirManager {
      * Stop streaming
      */
     fun stopStream() {
-        Log.i(TAG, "stopStream")
+        Log.i(TAG, "[Flir-BRIDGE-STREAMING] stopStream")
         sdkManager?.stopStream()
         isStreaming = false
     }
@@ -200,7 +201,7 @@ object FlirManager {
      * Disconnect from current device
      */
     fun disconnect() {
-        Log.i(TAG, "disconnect")
+        Log.i(TAG, "[Flir-BRIDGE-DISCONNECT] disconnect")
         sdkManager?.disconnect()
         isConnected = false
         isStreaming = false
@@ -318,7 +319,7 @@ object FlirManager {
         }
         
         override fun onDisconnected() {
-            Log.i(TAG, "Disconnected")
+            Log.i(TAG, "[Flir-BRIDGE-DISCONNECT] Disconnected callback")
             isConnected = false
             isStreaming = false
             connectedDeviceId = null
@@ -354,7 +355,7 @@ object FlirManager {
         }
 
         override fun onBatteryUpdated(level: Int, isCharging: Boolean) {
-            Log.d(TAG, "onBatteryUpdated: level=$level charging=$isCharging")
+            Log.d(TAG, "[Flir-BRIDGE-BATTERY] onBatteryUpdated: level=$level charging=$isCharging")
             emitBatteryState(level, isCharging)
         }
     }
@@ -382,10 +383,10 @@ object FlirManager {
     private fun emitDeviceState(state: String) {
         val ctx = reactContext
         if (ctx == null) {
-            Log.e(TAG, "Cannot emit FlirDeviceConnected($state) - reactContext is null!")
+            Log.e(TAG, "[Flir-BRIDGE-ERROR] Cannot emit FlirDeviceConnected($state) - reactContext is null!")
             return
         }
-        Log.d(TAG, "Emitting FlirDeviceConnected: $state")
+        Log.d(TAG, "[Flir-BRIDGE-CONNECTION] Emitting FlirDeviceConnected: $state")
         try {
             val params = Arguments.createMap().apply {
                 putString("state", state)
@@ -428,9 +429,9 @@ object FlirManager {
             
             ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 .emit("FlirDevicesFound", params)
-            Log.d(TAG, "Successfully emitted FlirDevicesFound")
+            Log.d(TAG, "[Flir-BRIDGE-DISCOVERY] Successfully emitted FlirDevicesFound (${devices.size} devices)")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to emit devices found", e)
+            Log.e(TAG, "[Flir-BRIDGE-ERROR] Failed to emit devices found", e)
         }
     }
 

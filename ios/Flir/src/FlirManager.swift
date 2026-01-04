@@ -75,6 +75,11 @@ import ThermalSDK
     private var activeClients: Set<String> = []
     private var shutdownWorkItem: DispatchWorkItem? = nil
     
+    // Battery polling timer (like Android)
+    private var batteryPollingTimer: Timer?
+    private var lastPolledBatteryLevel: Int = -1
+    private var lastPolledCharging: Bool = false
+    
 #if FLIR_ENABLED
     private var discovery: FLIRDiscovery?
     private var camera: FLIRCamera?
@@ -85,7 +90,12 @@ import ThermalSDK
     
     private override init() {
         super.init()
-        NSLog("[FlirManager] Initialized")
+        FlirLogger.log(.load, "FlirManager singleton initialized")
+        #if FLIR_ENABLED
+        FlirLogger.log(.load, "✅ FLIR SDK is ENABLED (ThermalSDK available)")
+        #else
+        FlirLogger.log(.load, "⚠️ FLIR SDK is DISABLED (FLIR_ENABLED not defined)")
+        #endif
     }
     
     // MARK: - Public State Accessors
@@ -335,11 +345,11 @@ import ThermalSDK
     // MARK: - Discovery
     
     @objc public func startDiscovery() {
-        NSLog("[FlirManager] Starting discovery...")
+        FlirLogger.log(.discovery, "Starting discovery...")
         
 #if FLIR_ENABLED
         if isScanning {
-            NSLog("[FlirManager] Already scanning")
+            FlirLogger.log(.discovery, "Already scanning - skipping")
             return
         }
         
@@ -349,6 +359,7 @@ import ThermalSDK
         if discovery == nil {
             discovery = FLIRDiscovery()
             discovery?.delegate = self
+            FlirLogger.log(.discovery, "Created FLIRDiscovery instance")
         }
         
         // Build interfaces based on available permissions
@@ -362,19 +373,24 @@ import ThermalSDK
         // Only add network discovery if NSLocalNetworkUsageDescription is present
         // This prevents crashes/errors when user doesn't have iOS developer registration
         // or hasn't declared network permission
-        if shouldEnableNetworkDiscovery() {
+        let networkEnabled = shouldEnableNetworkDiscovery()
+        if networkEnabled {
             interfaces.insert(.network)
-            NSLog("[FlirManager] Network discovery enabled (NSLocalNetworkUsageDescription present)")
-        } else {
-            NSLog("[FlirManager] Network discovery disabled (no NSLocalNetworkUsageDescription)")
         }
+        
+        // Log which interfaces are enabled (important for debugging)
+        FlirLogger.logDiscoveryInterfaces(
+            lightning: true,
+            network: networkEnabled,
+            wireless: true,
+            emulator: true
+        )
         
         discovery?.start(interfaces)
         
         emitStateChange("discovering")
-        NSLog("[FlirManager] Discovery started on interfaces: Lightning, \(interfaces.contains(.network) ? "Network, " : "")FlirOneWireless, Emulator")
 #else
-        NSLog("[FlirManager] FLIR SDK not available - discovery disabled")
+        FlirLogger.logError(.discovery, "FLIR SDK not available - discovery disabled")
         delegate?.onError("FLIR SDK not available")
 #endif
     }
@@ -399,28 +415,28 @@ import ThermalSDK
     /// Allow explicit override of network discovery (called from React Native)
     @objc public func setNetworkDiscoveryEnabled(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: "ilabsFlir.networkDiscoveryEnabled")
-        NSLog("[FlirManager] Network discovery override set to: \(enabled)")
+        FlirLogger.log(.discovery, "Network discovery override set to: \(enabled)")
     }
     
     @objc public func stopDiscovery() {
-        NSLog("[FlirManager] Stopping discovery...")
+        FlirLogger.log(.discovery, "Stopping discovery...")
         
 #if FLIR_ENABLED
         discovery?.stop()
         isScanning = false
-        NSLog("[FlirManager] Discovery stopped")
+        FlirLogger.log(.discovery, "Discovery stopped")
 #endif
     }
     
     // MARK: - Connection
     
     @objc public func connectToDevice(_ deviceId: String) {
-        NSLog("[FlirManager] Connecting to device: \(deviceId)")
+        FlirLogger.logConnectionAttempt(deviceId: deviceId)
         
 #if FLIR_ENABLED
         // Find the identity for this device
         guard let identity = findIdentity(for: deviceId) else {
-            NSLog("[FlirManager] Device not found: \(deviceId)")
+            FlirLogger.logError(.connection, "Device not found in identity map: \(deviceId)")
             delegate?.onError("Device not found: \(deviceId)")
             return
         }
@@ -429,6 +445,7 @@ import ThermalSDK
             self?.performConnection(identity: identity)
         }
 #else
+        FlirLogger.logError(.connection, "FLIR SDK not available")
         delegate?.onError("FLIR SDK not available")
 #endif
     }
@@ -443,14 +460,16 @@ import ThermalSDK
     private func performConnection(identity: FLIRIdentity) {
         // Use the proven connection pattern from FLIR SDK samples:
         // FLIROneCameraSwift uses: pair(identity, code:) then connect()
+        FlirLogger.log(.connection, "performConnection starting for: \(identity.deviceId())")
         
         if camera == nil {
             camera = FLIRCamera()
             camera?.delegate = self
+            FlirLogger.log(.connection, "Created new FLIRCamera instance")
         }
         
         guard let cam = camera else {
-            NSLog("[FlirManager] Failed to create FLIRCamera")
+            FlirLogger.logError(.connection, "Failed to create FLIRCamera instance")
             DispatchQueue.main.async { [weak self] in
                 self?.delegate?.onError("Failed to create camera instance")
             }
@@ -459,27 +478,30 @@ import ThermalSDK
         
         // Handle authentication for generic cameras (network cameras)
         if identity.cameraType() == .generic {
+            FlirLogger.log(.connection, "Generic/network camera - starting authentication...")
             let certName = getCertificateName()
             var status = FLIRAuthenticationStatus.pending
             while status == .pending {
                 status = cam.authenticate(identity, trustedConnectionName: certName)
                 if status == .pending {
-                    NSLog("[FlirManager] Waiting for camera authentication approval...")
+                    FlirLogger.log(.connection, "Waiting for camera authentication approval...")
                     Thread.sleep(forTimeInterval: 1.0)
                 }
             }
-            NSLog("[FlirManager] Authentication status: \(status.rawValue)")
+            FlirLogger.log(.connection, "Authentication status: \(status.rawValue)")
         }
         
         do {
             // Step 1: Pair with identity (required for FLIR One devices)
             // The code parameter is for BLE pairing, 0 for direct connection
+            FlirLogger.log(.connection, "Step 1: Pairing with device...")
             try cam.pair(identity, code: 0)
-            NSLog("[FlirManager] Paired with: \(identity.deviceId())")
+            FlirLogger.log(.connection, "✅ Paired successfully with: \(identity.deviceId())")
             
             // Step 2: Connect (no identity parameter - uses paired identity)
+            FlirLogger.log(.connection, "Step 2: Connecting to device...")
             try cam.connect()
-            NSLog("[FlirManager] Connected to: \(identity.deviceId())")
+            FlirLogger.log(.connection, "✅ Connected successfully to: \(identity.deviceId())")
             
             // Update state
             connectedIdentity = identity
@@ -490,22 +512,26 @@ import ThermalSDK
             // Get camera info if available
             if let remoteControl = cam.getRemoteControl(),
                let cameraInfo = try? remoteControl.getCameraInformation() {
-                NSLog("[FlirManager] Camera info: \(cameraInfo)")
+                FlirLogger.log(.connection, "Camera info: \(cameraInfo)")
             }
             
             // Get streams
             let streams = cam.getStreams()
+            let thermalCount = streams.filter { $0.isThermal }.count
+            FlirLogger.logConnectionSuccess(deviceId: identity.deviceId(), streamCount: streams.count, hasThermal: thermalCount > 0)
+            
             if !streams.isEmpty {
-                NSLog("[FlirManager] Found \(streams.count) streams")
-
                 // Find and start the first thermal stream (preferred) or any stream
                 let thermalStream = streams.first { $0.isThermal } ?? streams.first
                 if let streamToStart = thermalStream {
                     startStreamInternal(streamToStart)
                 }
             } else {
-                NSLog("[FlirManager] No streams available on camera")
+                FlirLogger.log(.streaming, "⚠️ No streams available on camera")
             }
+            
+            // Start battery polling (like Android does)
+            startBatteryPolling()
             
             // Notify delegate on main thread
             DispatchQueue.main.async { [weak self] in
@@ -521,7 +547,7 @@ import ThermalSDK
             }
             
         } catch {
-            NSLog("[FlirManager] Connection failed: \(error.localizedDescription)")
+            FlirLogger.logError(.connection, "Connection failed", error: error)
             _isConnected = false
             camera = nil
             DispatchQueue.main.async { [weak self] in
@@ -558,7 +584,7 @@ import ThermalSDK
     @objc public func startStream() {
 #if FLIR_ENABLED
         guard let streams = camera?.getStreams(), !streams.isEmpty else {
-            NSLog("[FlirManager] No streams available")
+            FlirLogger.log(.streaming, "⚠️ No streams available")
             return
         }
         startStreamInternal(streams[0])
@@ -566,7 +592,7 @@ import ThermalSDK
     }
     
     @objc public func stopStream() {
-        NSLog("[FlirManager] Stopping stream...")
+        FlirLogger.log(.streaming, "Stopping stream...")
         
 #if FLIR_ENABLED
         stream?.stop()
@@ -574,18 +600,20 @@ import ThermalSDK
         streamer = nil
         _isStreaming = false
         emitStateChange("connected")
+        FlirLogger.log(.streaming, "Stream stopped")
 #endif
     }
     
 #if FLIR_ENABLED
     private func startStreamInternal(_ newStream: FLIRStream) {
-        NSLog("[FlirManager] Starting stream...")
+        FlirLogger.log(.streaming, "Starting stream (thermal=\(newStream.isThermal))...")
         
         stream?.stop()
         stream = newStream
         
         if newStream.isThermal {
             streamer = FLIRThermalStreamer(stream: newStream)
+            FlirLogger.log(.streaming, "Created FLIRThermalStreamer for thermal stream")
         }
         
         newStream.delegate = self
@@ -594,9 +622,9 @@ import ThermalSDK
             try newStream.start()
             _isStreaming = true
             emitStateChange("streaming")
-            NSLog("[FlirManager] Stream started (thermal: \(newStream.isThermal))")
+            FlirLogger.log(.streaming, "✅ Stream started successfully (thermal=\(newStream.isThermal))")
         } catch {
-            NSLog("[FlirManager] Stream start failed: \(error)")
+            FlirLogger.logError(.streaming, "Stream start failed", error: error)
             stream = nil
             streamer = nil
             delegate?.onError("Stream start failed: \(error.localizedDescription)")
@@ -607,9 +635,12 @@ import ThermalSDK
     // MARK: - Disconnect
     
     @objc public func disconnect() {
-        NSLog("[FlirManager] Disconnecting...")
+        FlirLogger.log(.disconnect, "Disconnecting...")
         
 #if FLIR_ENABLED
+        // Stop battery polling
+        stopBatteryPolling()
+        
         stopStream()
         camera?.disconnect()
         camera = nil
@@ -620,14 +651,19 @@ import ThermalSDK
         _isStreaming = false
         _latestImage = nil
         
+        // Reset frame counter for next connection
+        FlirLogger.resetFrameCounter()
+        
         DispatchQueue.main.async { [weak self] in
             self?.delegate?.onDeviceDisconnected()
             self?.emitStateChange("disconnected")
         }
+        FlirLogger.log(.disconnect, "Disconnected successfully")
 #endif
     }
     
     @objc public func stop() {
+        FlirLogger.log(.disconnect, "stop() called - full shutdown")
         stopStream()
         disconnect()
         stopDiscovery()
@@ -658,10 +694,56 @@ import ThermalSDK
         return lastTemperature
     }
     
+    // MARK: - Battery Polling (like Android)
+    
+    private func startBatteryPolling() {
+        FlirLogger.log(.battery, "Starting battery polling timer (5s interval)")
+        
+        // Cancel any existing timer
+        stopBatteryPolling()
+        
+        // Schedule timer on main run loop
+        DispatchQueue.main.async { [weak self] in
+            self?.batteryPollingTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+                self?.pollBatteryState()
+            }
+            // Run immediately once
+            self?.pollBatteryState()
+        }
+    }
+    
+    private func stopBatteryPolling() {
+        if batteryPollingTimer != nil {
+            FlirLogger.log(.battery, "Stopping battery polling timer")
+        }
+        batteryPollingTimer?.invalidate()
+        batteryPollingTimer = nil
+    }
+    
+    private func pollBatteryState() {
+        let level = getBatteryLevel()
+        let charging = isBatteryCharging()
+        
+        // Only log and emit if values changed
+        if level != lastPolledBatteryLevel || charging != lastPolledCharging {
+            lastPolledBatteryLevel = level
+            lastPolledCharging = charging
+            
+            FlirLogger.logBattery(level: level, isCharging: charging)
+            
+            // Emit to delegate/RN via notification
+            NotificationCenter.default.post(
+                name: Notification.Name("FlirBatteryUpdated"),
+                object: nil,
+                userInfo: ["level": level, "isCharging": charging]
+            )
+        }
+    }
+    
     // MARK: - Emulator
     
     @objc public func startEmulator(type: String) {
-        NSLog("[FlirManager] Starting emulator: \(type)")
+        FlirLogger.log(.connection, "Starting emulator with type: \(type)")
         
 #if FLIR_ENABLED
         // Create emulator identity
@@ -671,6 +753,7 @@ import ThermalSDK
         } else if type.lowercased().contains("pro") {
             cameraType = .flirOneEdgePro
         }
+        FlirLogger.log(.connection, "Emulator camera type: \(cameraType)")
         
         if let emulatorIdentity = FLIRIdentity(emulatorType: cameraType) {
             discoveredDevices.append(FlirDeviceInfo(
@@ -680,11 +763,15 @@ import ThermalSDK
                 isEmulator: true
             ))
             identityMap[emulatorIdentity.deviceId()] = emulatorIdentity
+            FlirLogger.log(.connection, "Emulator identity created: \(emulatorIdentity.deviceId())")
             
             // Auto-connect to emulator
             performConnection(identity: emulatorIdentity)
+        } else {
+            FlirLogger.logError(.connection, "Failed to create emulator identity for type: \(type)")
         }
 #else
+        FlirLogger.logError(.connection, "FLIR SDK not available - emulator disabled")
         delegate?.onError("FLIR SDK not available - emulator disabled")
 #endif
     }
@@ -764,8 +851,12 @@ extension FlirManager: FLIRDiscoveryEventDelegate {
     public func cameraDiscovered(_ discoveredCamera: FLIRDiscoveredCamera) {
         let identity = discoveredCamera.identity
         let deviceId = identity.deviceId()
+        let displayName = discoveredCamera.displayName ?? deviceId
+        let commType = communicationInterfaceName(identity.communicationInterface())
+        let isEmulator = identity.communicationInterface() == .emulator
         
-        NSLog("[FlirManager] Camera discovered: \(deviceId)")
+        // Use FlirLogger for consistent logging
+        FlirLogger.logDeviceFound(deviceId: deviceId, name: displayName, type: commType, isEmulator: isEmulator)
         
         // Store identity for later connection
         identityMap[deviceId] = identity
@@ -773,14 +864,15 @@ extension FlirManager: FLIRDiscoveryEventDelegate {
         // Create device info
         let deviceInfo = FlirDeviceInfo(
             deviceId: deviceId,
-            name: discoveredCamera.displayName ?? deviceId,
-            communicationType: communicationInterfaceName(identity.communicationInterface()),
-            isEmulator: identity.communicationInterface() == .emulator
+            name: displayName,
+            communicationType: commType,
+            isEmulator: isEmulator
         )
         
         // Add to discovered list if not already present
         if !discoveredDevices.contains(where: { $0.deviceId == deviceId }) {
             discoveredDevices.append(deviceInfo)
+            FlirLogger.log(.discovery, "Total discovered devices: \(discoveredDevices.count)")
         }
         
         // Notify delegate
@@ -792,13 +884,14 @@ extension FlirManager: FLIRDiscoveryEventDelegate {
     
     public func cameraLost(_ cameraIdentity: FLIRIdentity) {
         let deviceId = cameraIdentity.deviceId()
-        NSLog("[FlirManager] Camera lost: \(deviceId)")
+        FlirLogger.log(.discovery, "Camera lost: \(deviceId)")
         
         identityMap.removeValue(forKey: deviceId)
         discoveredDevices.removeAll { $0.deviceId == deviceId }
         
         // If this was our connected device, handle disconnect
         if connectedDeviceId == deviceId {
+            FlirLogger.log(.disconnect, "Lost connected device - triggering disconnect")
             disconnect()
         }
         
@@ -809,7 +902,7 @@ extension FlirManager: FLIRDiscoveryEventDelegate {
     }
     
     public func discoveryError(_ error: String, netServiceError nsnetserviceserror: Int32, on iface: FLIRCommunicationInterface) {
-        NSLog("[FlirManager] Discovery error: \(error) (\(nsnetserviceserror)) on interface: \(iface)")
+        FlirLogger.logError(.discovery, "Discovery error: \(error) (code=\(nsnetserviceserror)) on interface: \(iface)")
         
         DispatchQueue.main.async { [weak self] in
             self?.delegate?.onError("Discovery error: \(error)")
@@ -817,7 +910,7 @@ extension FlirManager: FLIRDiscoveryEventDelegate {
     }
     
     public func discoveryFinished(_ iface: FLIRCommunicationInterface) {
-        NSLog("[FlirManager] Discovery finished on interface: \(iface)")
+        FlirLogger.log(.discovery, "Discovery finished on interface: \(iface)")
         isScanning = false
     }
 }
@@ -826,12 +919,18 @@ extension FlirManager: FLIRDiscoveryEventDelegate {
 
 extension FlirManager: FLIRDataReceivedDelegate {
     public func onDisconnected(_ camera: FLIRCamera, withError error: Error?) {
-        NSLog("[FlirManager] Camera disconnected: \(error?.localizedDescription ?? "no error")")
+        FlirLogger.logError(.disconnect, "Camera disconnected callback", error: error)
+        
+        // Stop battery polling
+        stopBatteryPolling()
         
         _isConnected = false
         _isStreaming = false
         connectedDeviceId = nil
         connectedDeviceName = nil
+        
+        // Reset frame counter
+        FlirLogger.resetFrameCounter()
         
         DispatchQueue.main.async { [weak self] in
             self?.delegate?.onDeviceDisconnected()
@@ -844,7 +943,7 @@ extension FlirManager: FLIRDataReceivedDelegate {
 
 extension FlirManager: FLIRStreamDelegate {
     public func onError(_ error: Error) {
-        NSLog("[FlirManager] Stream error: \(error)")
+        FlirLogger.logError(.streaming, "Stream error", error: error)
         
         DispatchQueue.main.async { [weak self] in
             self?.delegate?.onError("Stream error: \(error.localizedDescription)")
@@ -884,6 +983,9 @@ extension FlirManager: FLIRStreamDelegate {
                     }
                 }
                 
+                // Rate-limited frame logging
+                FlirLogger.logFrame(width: Int(image.size.width), height: Int(image.size.height), temperature: lastTemperature)
+                
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
                     self.delegate?.onFrameReceived(
@@ -911,7 +1013,7 @@ extension FlirManager: FLIRStreamDelegate {
                 }
             }
         } catch {
-            NSLog("[FlirManager] Streamer update error: \(error)")
+            FlirLogger.logError(.frame, "Streamer update error", error: error)
         }
     }
 }
