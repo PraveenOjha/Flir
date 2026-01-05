@@ -97,7 +97,9 @@ static BOOL flir_isPreferSdkRotation(void) {
 @property(nonatomic, copy) RCTPromiseRejectBlock connectReject;
 @end
 
-@implementation FlirModule
+@implementation FlirModule {
+  NSInteger _listenerCount;
+}
 
 RCT_EXPORT_MODULE(FlirModule);
 
@@ -107,6 +109,7 @@ RCT_EXPORT_MODULE(FlirModule);
 
 - (instancetype)init {
   if (self = [super init]) {
+    _listenerCount = 0;
     // Wire up delegate
     id manager = flir_manager_shared();
     if (manager) {
@@ -127,6 +130,9 @@ RCT_EXPORT_MODULE(FlirModule);
 }
 
 RCT_EXPORT_METHOD(addListener : (NSString *)eventName) {
+  _listenerCount++;
+  NSLog(@"[FlirModule] addListener: %@ (count: %ld)", eventName, (long)_listenerCount);
+  
   // When FlirDevicesFound listener is added, immediately emit current device list
   // This handles the case where discovery happened before React Native mounted
   if ([eventName isEqualToString:@"FlirDevicesFound"]) {
@@ -145,7 +151,9 @@ RCT_EXPORT_METHOD(addListener : (NSString *)eventName) {
 }
 
 RCT_EXPORT_METHOD(removeListeners : (NSInteger)count) {
-  // Required for RCTEventEmitter
+  _listenerCount -= count;
+  if (_listenerCount < 0) _listenerCount = 0;
+  NSLog(@"[FlirModule] removeListeners: %ld (remaining: %ld)", (long)count, (long)_listenerCount);
 }
 
 + (void)emitBatteryUpdateWithLevel:(NSInteger)level charging:(BOOL)charging {
@@ -424,9 +432,15 @@ RCT_EXPORT_METHOD(isPreferSdkRotation : (RCTPromiseResolveBlock)
     }
   }
   
-  NSLog(@"[FlirModule] onDevicesFound - emitting FlirDevicesFound with %lu devices", (unsigned long)arr.count);
-  [self sendEventWithName:@"FlirDevicesFound" 
-                     body:@{@"devices" : arr, @"count" : @(arr.count)}];
+  NSLog(@"[FlirModule] onDevicesFound - %lu devices, listenerCount: %ld", (unsigned long)arr.count, (long)_listenerCount);
+  
+  if (_listenerCount > 0) {
+    NSLog(@"[FlirModule] emitting FlirDevicesFound event");
+    [self sendEventWithName:@"FlirDevicesFound" 
+                       body:@{@"devices" : arr, @"count" : @(arr.count)}];
+  } else {
+    NSLog(@"[FlirModule] ⚠️ No listeners registered yet - devices will be re-emitted when listener is added");
+  }
 }
 
 - (void)onDeviceConnected:(id)device {

@@ -509,6 +509,8 @@ import ThermalSDK
             connectedDeviceName = identity.deviceId()
             _isConnected = true
             
+            FlirLogger.log(.connection, "[Flir-BRIDGE-CONNECTION] Connected to: \(identity.deviceId())")
+            
             // Get camera info if available
             if let remoteControl = cam.getRemoteControl(),
                let cameraInfo = try? remoteControl.getCameraInformation() {
@@ -542,8 +544,10 @@ import ThermalSDK
                     communicationType: self.communicationInterfaceName(identity.communicationInterface()),
                     isEmulator: identity.communicationInterface() == .emulator
                 )
-                self.delegate?.onDeviceConnected(deviceInfo)
+                
+                // Emit connected state (matches Android emitDeviceState("connected"))
                 self.emitStateChange("connected")
+                self.delegate?.onDeviceConnected(deviceInfo)
             }
             
         } catch {
