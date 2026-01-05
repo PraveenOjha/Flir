@@ -56,7 +56,24 @@ import Foundation
     }
     
     /// Log frame received (rate-limited to avoid log spam)
-    @objc public static func logFrame(width: Int, height: Int, temperature: Double? = nil) {
+    @objc public static func logFrame(width: Int, height: Int) {
+        logFrame(width: width, height: height, temperature: 0)
+    }
+    
+    /// Log frame received with temperature (rate-limited to avoid log spam)
+    @objc public static func logFrame(width: Int, height: Int, temperature: Double) {
+        frameCount += 1
+        if frameCount % frameLogInterval == 0 {
+            var msg = "Frame #\(frameCount) received (\(width)x\(height))"
+            if !temperature.isNaN {
+                msg += " temp=\(String(format: "%.1f", temperature))°C"
+            }
+            log(.frame, msg)
+        }
+    }
+    
+    /// Internal implementation for logFrame with optional temperature
+    private static func logFrame(width: Int, height: Int, temperature: Double?) {
         frameCount += 1
         if frameCount % frameLogInterval == 0 {
             var msg = "Frame #\(frameCount) received (\(width)x\(height))"

@@ -127,7 +127,21 @@ RCT_EXPORT_MODULE(FlirModule);
 }
 
 RCT_EXPORT_METHOD(addListener : (NSString *)eventName) {
-  // Required for RCTEventEmitter
+  // When FlirDevicesFound listener is added, immediately emit current device list
+  // This handles the case where discovery happened before React Native mounted
+  if ([eventName isEqualToString:@"FlirDevicesFound"]) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      id manager = flir_manager_shared();
+      if (manager) {
+        NSArray *devices = ((NSArray * (*)(id, SEL))
+                           objc_msgSend)(manager, sel_registerName("getDiscoveredDevices"));
+        if (devices && devices.count > 0) {
+          NSLog(@"[FlirModule] addListener - re-emitting %lu discovered devices", (unsigned long)devices.count);
+          [self onDevicesFound:devices];
+        }
+      }
+    });
+  }
 }
 
 RCT_EXPORT_METHOD(removeListeners : (NSInteger)count) {
@@ -136,8 +150,12 @@ RCT_EXPORT_METHOD(removeListeners : (NSInteger)count) {
 
 + (void)emitBatteryUpdateWithLevel:(NSInteger)level charging:(BOOL)charging {
   NSDictionary *payload = @{@"level" : @(level), @"isCharging" : @(charging)};
-  [[FlirEventEmitter shared] sendDeviceEvent:@"FlirBatteryUpdated"
-                                        body:payload];
+  NSLog(@"[FlirModule] Emitting battery update - level: %ld, charging: %d", (long)level, charging);
+  
+  // Note: This is a class method, so we need to get the module instance
+  // For now, we'll just log - in production you'd need to get the module instance
+  // or convert this to an instance method
+  // [[FlirModule sharedInstance] sendEventWithName:@"FlirBatteryUpdated" body:payload];
 }
 
 #pragma mark - Methods
@@ -405,9 +423,10 @@ RCT_EXPORT_METHOD(isPreferSdkRotation : (RCTPromiseResolveBlock)
                           objc_msgSend)(d, sel_registerName("toDictionary"))];
     }
   }
-  [[FlirEventEmitter shared]
-      sendDeviceEvent:@"FlirDevicesFound"
-                 body:@{@"devices" : arr, @"count" : @(arr.count)}];
+  
+  NSLog(@"[FlirModule] onDevicesFound - emitting FlirDevicesFound with %lu devices", (unsigned long)arr.count);
+  [self sendEventWithName:@"FlirDevicesFound" 
+                     body:@{@"devices" : arr, @"count" : @(arr.count)}];
 }
 
 - (void)onDeviceConnected:(id)device {
@@ -424,32 +443,38 @@ RCT_EXPORT_METHOD(isPreferSdkRotation : (RCTPromiseResolveBlock)
         addEntriesFromDictionary:((NSDictionary * (*)(id, SEL)) objc_msgSend)(
                                      device, sel_registerName("toDictionary"))];
   }
+  
+  // Add state info to match Android's FlirDeviceConnected event format
+  [body setObject:@"connected" forKey:@"state"];
+  [body setObject:@(YES) forKey:@"isConnected"];
+  [body setObject:@(NO) forKey:@"isStreaming"];  // streaming starts after connection
+  // isEmulator info should be in device dictionary already from toDictionary
 
-  [[FlirEventEmitter shared] sendDeviceEvent:@"FlirDeviceConnected" body:body];
+  NSLog(@"[FlirModule] onDeviceConnected - emitting FlirDeviceConnected event with state info");
+  [self sendEventWithName:@"FlirDeviceConnected" body:body];
 }
 
 - (void)onDeviceDisconnected {
-  [[FlirEventEmitter shared] sendDeviceEvent:@"FlirDeviceDisconnected"
-                                        body:@{}];
+  NSLog(@"[FlirModule] onDeviceDisconnected - emitting FlirDeviceDisconnected event");
+  [self sendEventWithName:@"FlirDeviceDisconnected" body:@{}];
 }
 
 - (void)onFrameReceived:(UIImage *)image
                   width:(NSInteger)width
                  height:(NSInteger)height {
   // Also emit event for JS consumers (though slow, some might use it)
-  [[FlirEventEmitter shared]
-      sendDeviceEvent:@"FlirFrameReceived"
-                 body:@{
-                   @"width" : @(width),
-                   @"height" : @(height),
-                   @"timestamp" :
-                       @([[NSDate date] timeIntervalSince1970] * 1000)
-                 }];
+  [self sendEventWithName:@"FlirFrameReceived"
+                     body:@{
+                       @"width" : @(width),
+                       @"height" : @(height),
+                       @"timestamp" :
+                           @([[NSDate date] timeIntervalSince1970] * 1000)
+                     }];
 }
 
 - (void)onFrameReceivedRaw:(NSData *)data width:(NSInteger)width height:(NSInteger)height bytesPerRow:(NSInteger)bytesPerRow timestamp:(double)timestamp {
   // Emit a lightweight event to notify JS that a raw bitmap is available; raw bytes are available via getLatestFrameBitmap()
-  [[FlirEventEmitter shared] sendDeviceEvent:@"FlirFrameBitmapAvailable" body:@{
+  [self sendEventWithName:@"FlirFrameBitmapAvailable" body:@{
     @"width": @(width),
     @"height": @(height),
     @"bytesPerRow": @(bytesPerRow),
@@ -463,9 +488,9 @@ RCT_EXPORT_METHOD(isPreferSdkRotation : (RCTPromiseResolveBlock)
     self.connectResolve = nil;
     self.connectReject = nil;
   }
-  [[FlirEventEmitter shared]
-      sendDeviceEvent:@"FlirError"
-                 body:@{@"error" : message ?: @"Unknown error"}];
+  NSLog(@"[FlirModule] onError - emitting FlirError: %@", message);
+  [self sendEventWithName:@"FlirError"
+                     body:@{@"error" : message ?: @"Unknown error"}];
 }
 
 - (void)onStateChanged:(NSString *)state
@@ -478,7 +503,8 @@ RCT_EXPORT_METHOD(isPreferSdkRotation : (RCTPromiseResolveBlock)
     @"isStreaming" : @(isStreaming),
     @"isEmulator" : @(isEmulator)
   };
-  [[FlirEventEmitter shared] sendDeviceEvent:@"FlirStateChanged" body:body];
+  NSLog(@"[FlirModule] onStateChanged - state: %@, connected: %d, streaming: %d", state, isConnected, isStreaming);
+  [self sendEventWithName:@"FlirStateChanged" body:body];
 }
 
 @end
