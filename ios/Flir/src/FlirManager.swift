@@ -174,25 +174,35 @@ import ThermalSDK
     }
 
     @objc public func getBatteryLevel() -> Int {
-#if FLIR_ENABLED
-        if let cam = camera {
-            if let val = cam.value(forKey: "batteryLevel") as? Int { return val }
-            if let batt = cam.value(forKey: "battery") as? NSObject,
-               let lv = batt.value(forKey: "level") as? Int { return lv }
+        // Emulators don't have battery - return -1 immediately
+        if isEmulator {
+            return -1
         }
-#endif
+        
+#if FLIR_ENABLED
+        // Only try battery access on real hardware (not emulators)
+        // Note: KVC can throw NSException which Swift can't catch
+        // So we avoid using KVC entirely for battery
+        return -1  // TODO: Find safe API to access battery without KVC
+#else
         return -1
+#endif
     }
 
     @objc public func isBatteryCharging() -> Bool {
-#if FLIR_ENABLED
-        if let cam = camera {
-            if let ch = cam.value(forKey: "isCharging") as? Bool { return ch }
-            if let batt = cam.value(forKey: "battery") as? NSObject,
-               let ch = batt.value(forKey: "charging") as? Bool { return ch }
+        // Emulators don't have battery - return false immediately
+        if isEmulator {
+            return false
         }
-#endif
+        
+#if FLIR_ENABLED
+        // Only try battery access on real hardware (not emulators)
+        // Note: KVC can throw NSException which Swift can't catch
+        // So we avoid using KVC entirely for battery
+        return false  // TODO: Find safe API to access battery without KVC
+#else
         return false
+#endif
     }
 
     @objc public func latestFrameImage() -> UIImage? {
@@ -701,7 +711,10 @@ import ThermalSDK
     // MARK: - Battery Polling (like Android)
     
     private func startBatteryPolling() {
-        FlirLogger.log(.battery, "Starting battery polling timer (5s interval)")
+        // Don't poll battery on emulators - they don't have batteries
+        if isEmulator {
+            return
+        }
         
         // Cancel any existing timer
         stopBatteryPolling()
@@ -717,9 +730,6 @@ import ThermalSDK
     }
     
     private func stopBatteryPolling() {
-        if batteryPollingTimer != nil {
-            FlirLogger.log(.battery, "Stopping battery polling timer")
-        }
         batteryPollingTimer?.invalidate()
         batteryPollingTimer = nil
     }
@@ -728,12 +738,10 @@ import ThermalSDK
         let level = getBatteryLevel()
         let charging = isBatteryCharging()
         
-        // Only log and emit if values changed
+        // Only emit if values changed
         if level != lastPolledBatteryLevel || charging != lastPolledCharging {
             lastPolledBatteryLevel = level
             lastPolledCharging = charging
-            
-            FlirLogger.logBattery(level: level, isCharging: charging)
             
             // Emit to delegate/RN via notification
             NotificationCenter.default.post(

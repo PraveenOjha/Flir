@@ -351,7 +351,20 @@ object FlirManager {
         
         override fun onError(message: String) {
             Log.e(TAG, "Error: $message")
-            emitError(message)
+            
+            // Parse error code if present (format: "CODE: message")
+            val parts = message.split(": ", limit = 2)
+            val errorCode = if (parts.size == 2) parts[0] else "FLIR_ERROR"
+            val errorMessage = if (parts.size == 2) parts[1] else message
+            
+            // Auto-disable streaming on critical errors to allow retry
+            if (errorCode.contains("NATIVE") || errorCode.contains("INIT")) {
+                Log.w(TAG, "[Flir-BRIDGE-ERROR] Critical error detected, stopping stream")
+                isStreaming = false
+                stopStream()
+            }
+            
+            emitError(errorCode, errorMessage)
         }
 
         override fun onBatteryUpdated(level: Int, isCharging: Boolean) {
@@ -454,13 +467,21 @@ object FlirManager {
     }
     
     private fun emitError(message: String) {
+        emitError("FLIR_ERROR", message)
+    }
+    
+    private fun emitError(errorCode: String, message: String) {
         val ctx = reactContext ?: return
         try {
             val params = Arguments.createMap().apply {
+                putString("code", errorCode)
                 putString("error", message)
+                putString("message", message) // For backward compatibility
+                putBoolean("canRetry", errorCode.contains("NATIVE") || errorCode.contains("INIT"))
             }
             ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 .emit("FlirError", params)
+            Log.d(TAG, "[Flir-BRIDGE-ERROR] Emitted FlirError: [$errorCode] $message")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to emit error", e)
         }

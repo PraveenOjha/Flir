@@ -129,9 +129,23 @@ RCT_EXPORT_MODULE(FlirModule);
   ];
 }
 
+- (void)startObserving {
+  // Called automatically by RCTEventEmitter when first listener is added
+  // This ensures the parent class knows we have listeners
+}
+
+- (void)stopObserving {
+  // Called automatically by RCTEventEmitter when last listener is removed
+}
+
 RCT_EXPORT_METHOD(addListener : (NSString *)eventName) {
   _listenerCount++;
   NSLog(@"[FlirModule] addListener: %@ (count: %ld)", eventName, (long)_listenerCount);
+  
+  // CRITICAL: Call parent to register with RCTEventEmitter's internal tracking
+  // Without this, sendEventWithName will show "no listeners registered" warning
+  // and may not deliver events properly
+  [super addListener:eventName];
   
   // When FlirDevicesFound listener is added, immediately emit current device list
   // This handles the case where discovery happened before React Native mounted
@@ -154,6 +168,9 @@ RCT_EXPORT_METHOD(removeListeners : (NSInteger)count) {
   _listenerCount -= count;
   if (_listenerCount < 0) _listenerCount = 0;
   NSLog(@"[FlirModule] removeListeners: %ld (remaining: %ld)", (long)count, (long)_listenerCount);
+  
+  // CRITICAL: Call parent to unregister with RCTEventEmitter's internal tracking
+  [super removeListeners:count];
 }
 
 + (void)emitBatteryUpdateWithLevel:(NSInteger)level charging:(BOOL)charging {
@@ -234,18 +251,26 @@ RCT_EXPORT_METHOD(getDiscoveredDevices : (RCTPromiseResolveBlock)
 RCT_EXPORT_METHOD(connectToDevice : (NSString *)deviceId resolver : (
     RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
-    self.connectResolve = resolve;
-    self.connectReject = reject;
+    NSLog(@"[FlirModule] connectToDevice called for: %@", deviceId);
 
     id manager = flir_manager_shared();
     if (manager &&
         [manager respondsToSelector:sel_registerName("connectToDevice:")]) {
+      NSLog(@"[FlirModule] Calling FlirManager.connectToDevice");
+      
+      // Store callbacks for event-driven updates (but don't block on them)
+      self.connectResolve = nil;  // Don't use promise for blocking
+      self.connectReject = nil;
+      
+      // Initiate connection asynchronously
       ((void (*)(id, SEL, id))objc_msgSend)(
           manager, sel_registerName("connectToDevice:"), deviceId);
+      
+      // Resolve immediately - connection status will come via events
+      resolve(@(YES));
     } else {
+      NSLog(@"[FlirModule] FlirManager not found");
       reject(@"ERR_NO_MANAGER", @"FlirManager not found", nil);
-      self.connectResolve = nil;
-      self.connectReject = nil;
     }
   });
 }
@@ -277,16 +302,21 @@ RCT_EXPORT_METHOD(stopFlir : (RCTPromiseResolveBlock)
 RCT_EXPORT_METHOD(startEmulator : (NSString *)emulatorType resolver : (
     RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
-    self.connectResolve = resolve;
-    self.connectReject = reject;
+    NSLog(@"[FlirModule] startEmulator called for type: %@", emulatorType);
+    
     id manager = flir_manager_shared();
     if (manager && [manager respondsToSelector:sel_registerName(
                                                    "startEmulatorWithType:")]) {
-      // Swift: startEmulator(type: String) -> exposed as startEmulatorWithType:
-      // ? Or startEmulatorWith? Swift default naming: startEmulator(type:) ->
-      // startEmulatorWithType:
+      // Store callbacks for event-driven updates (but don't block on them)
+      self.connectResolve = nil;
+      self.connectReject = nil;
+      
+      // Initiate emulator start asynchronously
       ((void (*)(id, SEL, id))objc_msgSend)(
           manager, sel_registerName("startEmulatorWithType:"), emulatorType);
+      
+      // Resolve immediately - connection status will come via events
+      resolve(@(YES));
     } else {
       // Fallback if selector assumption wrong/mismatch
       reject(@"ERR_NOT_IMPL",
@@ -444,12 +474,6 @@ RCT_EXPORT_METHOD(isPreferSdkRotation : (RCTPromiseResolveBlock)
 }
 
 - (void)onDeviceConnected:(id)device {
-  if (self.connectResolve) {
-    self.connectResolve(@(YES));
-    self.connectResolve = nil;
-    self.connectReject = nil;
-  }
-
   // device is FlirDeviceInfo
   NSMutableDictionary *body = [NSMutableDictionary new];
   if ([device respondsToSelector:sel_registerName("toDictionary")]) {
@@ -497,11 +521,6 @@ RCT_EXPORT_METHOD(isPreferSdkRotation : (RCTPromiseResolveBlock)
 }
 
 - (void)onError:(NSString *)message {
-  if (self.connectReject) {
-    self.connectReject(@"ERR_FLIR", message, nil);
-    self.connectResolve = nil;
-    self.connectReject = nil;
-  }
   NSLog(@"[FlirModule] onError - emitting FlirError: %@", message);
   [self sendEventWithName:@"FlirError"
                      body:@{@"error" : message ?: @"Unknown error"}];

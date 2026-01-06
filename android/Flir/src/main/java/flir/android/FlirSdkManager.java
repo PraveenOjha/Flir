@@ -328,6 +328,19 @@ public class FlirSdkManager {
             return;
         }
 
+        // CRITICAL FIX: Prevent starting stream if previous stream is still active
+        // This prevents race conditions and resource conflicts
+        if (streamer != null || activeStream != null) {
+            Log.w(TAG, "[Flir-STREAMING] Stream already active, stopping first");
+            stopStream();
+            
+            // Wait for cleanup to complete
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException ignored) {
+            }
+        }
+
         executor.execute(() -> {
             try {
                 // Get available streams
@@ -351,7 +364,46 @@ public class FlirSdkManager {
                 }
 
                 activeStream = thermalStream;
-                streamer = new ThermalStreamer(thermalStream);
+                
+                // CRITICAL FIX: Validate stream before creating ThermalStreamer
+                // The FLIR SDK native library can crash if stream is in invalid state
+                if (!thermalStream.isAvailable()) {
+                    notifyError("Thermal stream not available. Please reconnect device.");
+                    return;
+                }
+                
+                // CRITICAL FIX: Wrap ThermalStreamer creation in try-catch
+                // While native crashes usually bypass Java exception handling,
+                // we can catch:
+                // 1. JNI errors (UnsatisfiedLinkError, Error subclasses)
+                // 2. SDK errors before they reach native code
+                // 3. Resource initialization failures
+                // This won't prevent SIGSEGV/SIGABRT but reduces crash frequency
+                try {
+                    // Small delay to ensure stream and resources are fully initialized
+                    // This prevents race conditions in the native filter chain setup
+                    Thread.sleep(150);
+                    
+                    streamer = new ThermalStreamer(thermalStream);
+                    Log.d(TAG, "[Flir-STREAMING] ThermalStreamer created successfully");
+                } catch (UnsatisfiedLinkError e) {
+                    // JNI library loading error
+                    Log.e(TAG, "[Flir-STREAMING] JNI library error creating ThermalStreamer", e);
+                    notifyError("FLIR_NATIVE_ERROR", "Failed to load native library. Please restart app.");
+                    return;
+                } catch (Exception e) {
+                    // Java exception during initialization
+                    Log.e(TAG, "[Flir-STREAMING] Failed to create ThermalStreamer", e);
+                    notifyError("FLIR_INIT_ERROR", "Failed to initialize thermal camera: " + e.getMessage());
+                    return;
+                } catch (Error e) {
+                    // Catch native errors/crashes from FLIR SDK
+                    // Note: True SIGSEGV crashes will still kill the process,
+                    // but some JNI errors can be caught here
+                    Log.e(TAG, "[Flir-STREAMING] Native error creating ThermalStreamer", e);
+                    notifyError("FLIR_NATIVE_ERROR", "Native error from FLIR device. Please reconnect and retry.");
+                    return;
+                }
 
                 // Start receiving frames using OnReceived and OnRemoteError
                 thermalStream.start(
@@ -419,7 +471,15 @@ public class FlirSdkManager {
             activeStream = null;
         }
 
-        streamer = null;
+        // CRITICAL FIX: Properly cleanup streamer to prevent resource leaks
+        if (streamer != null) {
+            try {
+                // Give streamer time to cleanup before nulling
+                Thread.sleep(50);
+            } catch (InterruptedException ignored) {
+            }
+            streamer = null;
+        }
 
         // Reset frame processing state
         isProcessingFrame = false;
@@ -710,6 +770,17 @@ public class FlirSdkManager {
     private void notifyError(String message) {
         if (listener != null) {
             listener.onError(message);
+        }
+    }
+    
+    /**
+     * Notify error with error code for better handling
+     */
+    private void notifyError(String errorCode, String message) {
+        Log.e(TAG, "[" + errorCode + "] " + message);
+        if (listener != null) {
+            // Send both code and message - listener can parse it
+            listener.onError(errorCode + ": " + message);
         }
     }
 
