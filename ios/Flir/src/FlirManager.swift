@@ -49,7 +49,11 @@ import ThermalSDK
 }
 
 /// Main FLIR Manager - Singleton that manages all FLIR camera operations
+#if FLIR_ENABLED
+@objc public class FlirManager: NSObject, FLIRDiscoveryEventDelegate, FLIRDataReceivedDelegate, FLIRStreamDelegate {
+#else
 @objc public class FlirManager: NSObject {
+#endif
     @objc public static let shared = FlirManager()
     
     // MARK: - Properties
@@ -74,6 +78,8 @@ import ThermalSDK
     // Client lifecycle for discovery/connection ownership
     private var activeClients: Set<String> = []
     private var shutdownWorkItem: DispatchWorkItem? = nil
+    // Discovery timeout to prevent infinite scanning
+    private var discoveryTimeoutWorkItem: DispatchWorkItem? = nil
     
     // Battery polling timer (like Android)
     private var batteryPollingTimer: Timer?
@@ -86,6 +92,7 @@ import ThermalSDK
     private var stream: FLIRStream?
     private var streamer: FLIRThermalStreamer?
     private var connectedIdentity: FLIRIdentity?
+    private var identityMap: [String: FLIRIdentity] = [:]
 #endif
     
     private override init() {
@@ -399,6 +406,26 @@ import ThermalSDK
         discovery?.start(interfaces)
         
         emitStateChange("discovering")
+        
+        // Set timeout to prevent infinite scanning (matches Android's 8-second timeout)
+        discoveryTimeoutWorkItem?.cancel()
+        let timeoutWork = DispatchWorkItem { [weak self] in
+            guard let self = self, self.isScanning else { return }
+            FlirLogger.log(.discovery, "⏱ Discovery timeout reached - stopping scan")
+            self.discovery?.stop()
+            self.isScanning = false
+            
+            // Emit final device list and state
+            DispatchQueue.main.async {
+                self.delegate?.onDevicesFound(self.discoveredDevices)
+                if self.discoveredDevices.isEmpty {
+                    self.emitStateChange("no_device_found")
+                    self.delegate?.onError("No FLIR devices found")
+                }
+            }
+        }
+        discoveryTimeoutWorkItem = timeoutWork
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0, execute: timeoutWork)
 #else
         FlirLogger.logError(.discovery, "FLIR SDK not available - discovery disabled")
         delegate?.onError("FLIR SDK not available")
@@ -432,6 +459,8 @@ import ThermalSDK
         FlirLogger.log(.discovery, "Stopping discovery...")
         
 #if FLIR_ENABLED
+        discoveryTimeoutWorkItem?.cancel()
+        discoveryTimeoutWorkItem = nil
         discovery?.stop()
         isScanning = false
         FlirLogger.log(.discovery, "Discovery stopped")
@@ -461,8 +490,6 @@ import ThermalSDK
     }
     
 #if FLIR_ENABLED
-    private var identityMap: [String: FLIRIdentity] = [:]
-    
     private func findIdentity(for deviceId: String) -> FLIRIdentity? {
         return identityMap[deviceId]
     }
@@ -859,7 +886,6 @@ import ThermalSDK
 // MARK: - FLIRDiscoveryEventDelegate
 
 #if FLIR_ENABLED
-extension FlirManager: FLIRDiscoveryEventDelegate {
     public func cameraDiscovered(_ discoveredCamera: FLIRDiscoveredCamera) {
         let identity = discoveredCamera.identity
         let deviceId = identity.deviceId()
@@ -916,19 +942,43 @@ extension FlirManager: FLIRDiscoveryEventDelegate {
     public func discoveryError(_ error: String, netServiceError nsnetserviceserror: Int32, on iface: FLIRCommunicationInterface) {
         FlirLogger.logError(.discovery, "Discovery error: \(error) (code=\(nsnetserviceserror)) on interface: \(iface)")
         
+        // Stop scanning and cancel timeout on error
+        discoveryTimeoutWorkItem?.cancel()
+        discoveryTimeoutWorkItem = nil
+        discovery?.stop()
+        isScanning = false
+        
+        // Emit current device list (could be empty) so RN/UI can recover
         DispatchQueue.main.async { [weak self] in
-            self?.delegate?.onError("Discovery error: \(error)")
+            guard let self = self else { return }
+            self.delegate?.onDevicesFound(self.discoveredDevices)
+            self.delegate?.onError("Discovery error: \(error)")
         }
     }
     
     public func discoveryFinished(_ iface: FLIRCommunicationInterface) {
         FlirLogger.log(.discovery, "Discovery finished on interface: \(iface)")
         isScanning = false
+        
+        // Cancel timeout since discovery finished normally
+        discoveryTimeoutWorkItem?.cancel()
+        discoveryTimeoutWorkItem = nil
+        
+        // CRITICAL: Emit final device list so RN layer doesn't hang waiting for results
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.delegate?.onDevicesFound(self.discoveredDevices)
+            // If no devices were found, emit explicit state so UI can show "no devices"
+            if self.discoveredDevices.isEmpty {
+                self.emitStateChange("no_device_found")
+            }
+        }
     }
 }
 
 // MARK: - FLIRDataReceivedDelegate
 
+#if FLIR_ENABLED
 extension FlirManager: FLIRDataReceivedDelegate {
     public func onDisconnected(_ camera: FLIRCamera, withError error: Error?) {
         FlirLogger.logError(.disconnect, "Camera disconnected callback", error: error)
