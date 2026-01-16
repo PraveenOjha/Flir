@@ -472,16 +472,22 @@ import ThermalSDK
         // Find the identity for this device
         guard let identity = findIdentity(for: deviceId) else {
             FlirLogger.logError(.connection, "Device not found in identity map: \(deviceId)")
-            delegate?.onError("Device not found: \(deviceId)")
+            DispatchQueue.main.async { [weak self] in
+                self?.emitStateChange("connection_failed")
+                self?.delegate?.onError("Device not found: \(deviceId)")
+            }
             return
         }
         
+        // Run connection on background thread with timeout monitoring
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.performConnection(identity: identity)
         }
 #else
         FlirLogger.logError(.connection, "FLIR SDK not available")
-        delegate?.onError("FLIR SDK not available")
+        DispatchQueue.main.async { [weak self] in
+            self?.delegate?.onError("FLIR SDK not available")
+        }
 #endif
     }
     
@@ -514,14 +520,35 @@ import ThermalSDK
             FlirLogger.log(.connection, "Generic/network camera - starting authentication...")
             let certName = getCertificateName()
             var status = FLIRAuthenticationStatus.pending
-            while status == .pending {
+            var attempts = 0
+            let maxAttempts = 10 // 10 seconds max
+            
+            while status == .pending && attempts < maxAttempts {
                 status = cam.authenticate(identity, trustedConnectionName: certName)
                 if status == .pending {
-                    FlirLogger.log(.connection, "Waiting for camera authentication approval...")
+                    FlirLogger.log(.connection, "Waiting for camera authentication approval... (\(attempts + 1)/\(maxAttempts))")
                     Thread.sleep(forTimeInterval: 1.0)
+                    attempts += 1
                 }
             }
+            
+            if status == .pending {
+                FlirLogger.logError(.connection, "Authentication timeout after \(maxAttempts) seconds")
+                DispatchQueue.main.async { [weak self] in
+                    self?.delegate?.onError("Camera authentication timeout - device may require approval")
+                }
+                return
+            }
+            
             FlirLogger.log(.connection, "Authentication status: \(status.rawValue)")
+            
+            if status != .authenticated {
+                FlirLogger.logError(.connection, "Authentication failed with status: \(status.rawValue)")
+                DispatchQueue.main.async { [weak self] in
+                    self?.delegate?.onError("Camera authentication failed")
+                }
+                return
+            }
         }
         
         do {
@@ -532,6 +559,7 @@ import ThermalSDK
             FlirLogger.log(.connection, "✅ Paired successfully with: \(identity.deviceId())")
             
             // Step 2: Connect (no identity parameter - uses paired identity)
+            // Note: This can hang on some devices - ensure we have timeout in place
             FlirLogger.log(.connection, "Step 2: Connecting to device...")
             try cam.connect()
             FlirLogger.log(.connection, "✅ Connected successfully to: \(identity.deviceId())")
@@ -586,8 +614,14 @@ import ThermalSDK
         } catch {
             FlirLogger.logError(.connection, "Connection failed", error: error)
             _isConnected = false
+            _isStreaming = false
+            connectedDeviceId = nil
+            connectedDeviceName = nil
             camera = nil
+            
+            // CRITICAL: Always emit error state to RN so UI doesn't hang waiting
             DispatchQueue.main.async { [weak self] in
+                self?.emitStateChange("connection_failed")
                 self?.delegate?.onError("Connection failed: \(error.localizedDescription)")
             }
         }
