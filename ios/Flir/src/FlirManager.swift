@@ -49,11 +49,7 @@ import ThermalSDK
 }
 
 /// Main FLIR Manager - Singleton that manages all FLIR camera operations
-#if FLIR_ENABLED
-@objc public class FlirManager: NSObject, FLIRDiscoveryEventDelegate, FLIRDataReceivedDelegate, FLIRStreamDelegate {
-#else
 @objc public class FlirManager: NSObject {
-#endif
     @objc public static let shared = FlirManager()
     
     // MARK: - Properties
@@ -886,6 +882,7 @@ import ThermalSDK
 // MARK: - FLIRDiscoveryEventDelegate
 
 #if FLIR_ENABLED
+extension FlirManager: FLIRDiscoveryEventDelegate {
     public func cameraDiscovered(_ discoveredCamera: FLIRDiscoveredCamera) {
         let identity = discoveredCamera.identity
         let deviceId = identity.deviceId()
@@ -975,6 +972,7 @@ import ThermalSDK
         }
     }
 }
+#endif
 
 // MARK: - FLIRDataReceivedDelegate
 
@@ -1000,8 +998,11 @@ extension FlirManager: FLIRDataReceivedDelegate {
         }
     }
 }
+#endif
 
 // MARK: - FLIRStreamDelegate
+
+#if FLIR_ENABLED
 
 extension FlirManager: FLIRStreamDelegate {
     public func onError(_ error: Error) {
