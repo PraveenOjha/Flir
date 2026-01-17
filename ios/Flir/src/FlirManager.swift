@@ -541,14 +541,6 @@ import ThermalSDK
             }
             
             FlirLogger.log(.connection, "Authentication status: \(status.rawValue)")
-            
-            if status != .authenticated {
-                FlirLogger.logError(.connection, "Authentication failed with status: \(status.rawValue)")
-                DispatchQueue.main.async { [weak self] in
-                    self?.delegate?.onError("Camera authentication failed")
-                }
-                return
-            }
         }
         
         do {
