@@ -204,12 +204,15 @@ RCT_EXPORT_METHOD(setNetworkDiscoveryEnabled : (BOOL)enabled resolver : (
 
 RCT_EXPORT_METHOD(startDiscovery : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  NSLog(@"[FlirModule] [%@] ⏱ RN->startDiscovery called", [NSDate date]);
   dispatch_async(dispatch_get_main_queue(), ^{
     id manager = flir_manager_shared();
     if (manager &&
         [manager respondsToSelector:sel_registerName("startDiscovery")]) {
+      NSLog(@"[FlirModule] [%@] ⏱ Calling FlirManager.startDiscovery", [NSDate date]);
       ((void (*)(id, SEL))objc_msgSend)(manager,
                                         sel_registerName("startDiscovery"));
+      NSLog(@"[FlirModule] [%@] ⏱ FlirManager.startDiscovery returned", [NSDate date]);
     }
     resolve(@(YES));
   });
@@ -250,13 +253,12 @@ RCT_EXPORT_METHOD(getDiscoveredDevices : (RCTPromiseResolveBlock)
 
 RCT_EXPORT_METHOD(connectToDevice : (NSString *)deviceId resolver : (
     RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  NSLog(@"[FlirModule] [%@] ⏱ RN->connectToDevice called for: %@", [NSDate date], deviceId);
   dispatch_async(dispatch_get_main_queue(), ^{
-    NSLog(@"[FlirModule] connectToDevice called for: %@", deviceId);
-
     id manager = flir_manager_shared();
     if (manager &&
         [manager respondsToSelector:sel_registerName("connectToDevice:")]) {
-      NSLog(@"[FlirModule] Calling FlirManager.connectToDevice");
+      NSLog(@"[FlirModule] [%@] ⏱ Calling FlirManager.connectToDevice", [NSDate date]);
       
       // Store callbacks for event-driven updates (but don't block on them)
       self.connectResolve = nil;  // Don't use promise for blocking
@@ -266,10 +268,12 @@ RCT_EXPORT_METHOD(connectToDevice : (NSString *)deviceId resolver : (
       ((void (*)(id, SEL, id))objc_msgSend)(
           manager, sel_registerName("connectToDevice:"), deviceId);
       
+      NSLog(@"[FlirModule] [%@] ⏱ FlirManager.connectToDevice returned (async started)", [NSDate date]);
+      
       // Resolve immediately - connection status will come via events
       resolve(@(YES));
     } else {
-      NSLog(@"[FlirModule] FlirManager not found");
+      NSLog(@"[FlirModule] [%@] ❌ FlirManager not found", [NSDate date]);
       reject(@"ERR_NO_MANAGER", @"FlirManager not found", nil);
     }
   });

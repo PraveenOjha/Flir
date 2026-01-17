@@ -361,13 +361,19 @@ import ThermalSDK
         FlirLogger.log(.discovery, "Starting discovery...")
         
 #if FLIR_ENABLED
+        // Guard: prevent re-entry if already scanning
         if isScanning {
-            FlirLogger.log(.discovery, "Already scanning - skipping")
+            FlirLogger.log(.discovery, "⚠️ Discovery already in progress - ignoring duplicate startDiscovery call")
             return
         }
         
+        // Cancel any previous timeout and reset state
+        discoveryTimeoutWorkItem?.cancel()
+        discoveryTimeoutWorkItem = nil
+        
         isScanning = true
         discoveredDevices.removeAll()
+        identityMap.removeAll()
         
         if discovery == nil {
             discovery = FLIRDiscovery()
@@ -407,7 +413,7 @@ import ThermalSDK
         discoveryTimeoutWorkItem?.cancel()
         let timeoutWork = DispatchWorkItem { [weak self] in
             guard let self = self, self.isScanning else { return }
-            FlirLogger.log(.discovery, "⏱ Discovery timeout reached - stopping scan")
+            FlirLogger.log(.discovery, "❌ ⏱ DISCOVERY TIMEOUT triggered (8s) - stopping scan")
             self.discovery?.stop()
             self.isScanning = false
             
@@ -459,6 +465,16 @@ import ThermalSDK
         discoveryTimeoutWorkItem = nil
         discovery?.stop()
         isScanning = false
+        
+        // Emit final device list to RN so UI updates properly
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.delegate?.onDevicesFound(self.discoveredDevices)
+            if self.discoveredDevices.isEmpty {
+                self.emitStateChange("no_device_found")
+            }
+        }
+        
         FlirLogger.log(.discovery, "Discovery stopped")
 #endif
     }
@@ -469,6 +485,14 @@ import ThermalSDK
         FlirLogger.logConnectionAttempt(deviceId: deviceId)
         
 #if FLIR_ENABLED
+        // Guard: if already connected, disconnect first
+        if _isConnected {
+            FlirLogger.log(.connection, "⚠️ Already connected - disconnecting first...")
+            disconnect()
+            // Give disconnect a moment to complete
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        
         // Find the identity for this device
         guard let identity = findIdentity(for: deviceId) else {
             FlirLogger.logError(.connection, "Device not found in identity map: \(deviceId)")
@@ -479,9 +503,33 @@ import ThermalSDK
             return
         }
         
-        // Run connection on background thread with timeout monitoring
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        // Run connection on background thread with overall timeout
+        let timeoutSeconds: Double = 15.0
+        var connectionCompleted = false
+        let connectionQueue = DispatchQueue.global(qos: .userInitiated)
+        
+        // Start connection attempt
+        connectionQueue.async { [weak self] in
             self?.performConnection(identity: identity)
+            connectionCompleted = true
+        }
+        
+        // Monitor for timeout
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeoutSeconds) { [weak self] in
+            guard let self = self, !connectionCompleted else { return }
+            
+            FlirLogger.logError(.connection, "❌ ⏱ CONNECTION TIMEOUT triggered after \(timeoutSeconds)s - aborting")
+            
+            // Force cleanup
+            self.camera = nil
+            self._isConnected = false
+            self.connectedDeviceId = nil
+            
+            DispatchQueue.main.async {
+                FlirLogger.log(.connection, "⏱ Emitting connection_failed to RN due to timeout")
+                self.emitStateChange("connection_failed")
+                self.delegate?.onError("Connection timeout - device not responding")
+            }
         }
 #else
         FlirLogger.logError(.connection, "FLIR SDK not available")
@@ -499,6 +547,8 @@ import ThermalSDK
     private func performConnection(identity: FLIRIdentity) {
         // Use the proven connection pattern from FLIR SDK samples:
         // FLIROneCameraSwift uses: pair(identity, code:) then connect()
+        let startTime = Date()
+        FlirLogger.log(.connection, "⏱ performConnection STARTED for: \(identity.deviceId())")
         FlirLogger.log(.connection, "performConnection starting for: \(identity.deviceId())")
         
         if camera == nil {
@@ -517,11 +567,12 @@ import ThermalSDK
         
         // Handle authentication for generic cameras (network cameras)
         if identity.cameraType() == .generic {
-            FlirLogger.log(.connection, "Generic/network camera - starting authentication...")
+            FlirLogger.log(.connection, "⏱ Generic/network camera - AUTHENTICATION starting...")
             let certName = getCertificateName()
             var status = FLIRAuthenticationStatus.pending
             var attempts = 0
             let maxAttempts = 10 // 10 seconds max
+            let authStartTime = Date()
             
             while status == .pending && attempts < maxAttempts {
                 status = cam.authenticate(identity, trustedConnectionName: certName)
@@ -533,28 +584,30 @@ import ThermalSDK
             }
             
             if status == .pending {
-                FlirLogger.logError(.connection, "Authentication timeout after \(maxAttempts) seconds")
+                let authDuration = Date().timeIntervalSince(authStartTime)
+                FlirLogger.logError(.connection, "❌ Authentication TIMEOUT after \(authDuration)s (\(maxAttempts) attempts)")
                 DispatchQueue.main.async { [weak self] in
                     self?.delegate?.onError("Camera authentication timeout - device may require approval")
                 }
                 return
             }
             
-            FlirLogger.log(.connection, "Authentication status: \(status.rawValue)")
+            let authDuration = Date().timeIntervalSince(authStartTime)
+            FlirLogger.log(.connection, "✅ Authentication completed in \(authDuration)s - status: \(status.rawValue)")
         }
         
         do {
             // Step 1: Pair with identity (required for FLIR One devices)
             // The code parameter is for BLE pairing, 0 for direct connection
-            FlirLogger.log(.connection, "Step 1: Pairing with device...")
+            FlirLogger.log(.connection, "⏱ Step 1: PAIRING starting... [time since start: \(Date().timeIntervalSince(startTime))s]")
             try cam.pair(identity, code: 0)
-            FlirLogger.log(.connection, "✅ Paired successfully with: \(identity.deviceId())")
+            FlirLogger.log(.connection, "✅ Step 1: PAIRED successfully [time: \(Date().timeIntervalSince(startTime))s]")
             
             // Step 2: Connect (no identity parameter - uses paired identity)
             // Note: This can hang on some devices - ensure we have timeout in place
-            FlirLogger.log(.connection, "Step 2: Connecting to device...")
+            FlirLogger.log(.connection, "⏱ Step 2: CONNECTING starting... [time: \(Date().timeIntervalSince(startTime))s]")
             try cam.connect()
-            FlirLogger.log(.connection, "✅ Connected successfully to: \(identity.deviceId())")
+            FlirLogger.log(.connection, "✅ Step 2: CONNECTED successfully [time: \(Date().timeIntervalSince(startTime))s]")
             
             // Update state
             connectedIdentity = identity
@@ -840,6 +893,12 @@ import ThermalSDK
     // MARK: - State Emission
     
     private func emitStateChange(_ state: String) {
+        let timestamp = Date()
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss.SSS"
+        let timeStr = formatter.string(from: timestamp)
+        FlirLogger.log(.connection, "⏱ [\(timeStr)] EMITTING STATE to RN: '\(state)'")
+        
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.delegate?.onStateChanged(
@@ -848,6 +907,7 @@ import ThermalSDK
                 isStreaming: self._isStreaming,
                 isEmulator: self.isEmulator
             )
+            FlirLogger.log(.connection, "✅ [\(timeStr)] State '\(state)' emitted to RN")
         }
     }
     
