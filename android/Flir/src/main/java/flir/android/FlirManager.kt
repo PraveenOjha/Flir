@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import com.facebook.react.bridge.Arguments
-import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContext
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
@@ -17,17 +16,15 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Simplified FlirManager - bridge between React Native and FlirSdkManager
- * No filtering - returns ALL discovered devices (USB, Network, Emulator)
- * Let React Native handle any filtering logic
+ * Matches the simplified pattern: scan -> connect -> stream -> disconnect
  */
 object FlirManager {
     private const val TAG = "FlirManager"
     
     private var sdkManager: FlirSdkManager? = null
     private var reactContext: ReactContext? = null
-    private var appContext: Context? = null
     
-    // Frame rate limiting
+    // Frame rate limiting for RN events
     private val lastEmitMs = AtomicLong(0)
     private val minEmitIntervalMs = 100L // ~10 fps max for RN events
     
@@ -38,8 +35,12 @@ object FlirManager {
     private var isStreaming = false
     private var connectedDeviceId: String? = null
     private var connectedDeviceName: String? = null
+
+    // Concurrency control
+    private val shouldProcessFrames = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val isUpdatingTexture = java.util.concurrent.atomic.AtomicBoolean(false)
     
-    // Latest bitmap for texture updates
+    // Latest bitmap
     private var latestBitmap: Bitmap? = null
     
     // Callbacks
@@ -47,82 +48,59 @@ object FlirManager {
         fun onTextureUpdate(bitmap: Bitmap, textureUnit: Int)
     }
     
-    interface TemperatureCallback {
-        fun onTemperatureData(temperature: Double, x: Int, y: Int)
-    }
-    
     private var textureCallback: TextureUpdateCallback? = null
-    private var temperatureCallback: TemperatureCallback? = null
     
     fun setTextureCallback(callback: TextureUpdateCallback?) {
         textureCallback = callback
     }
-    
-    fun setTemperatureCallback(callback: TemperatureCallback?) {
+
+    interface TemperatureUpdateCallback {
+        fun onTemperatureUpdate(temperature: Double)
+    }
+
+    private var temperatureCallback: TemperatureUpdateCallback? = null
+
+    fun setTemperatureCallback(callback: TemperatureUpdateCallback?) {
         temperatureCallback = callback
     }
     
     fun getLatestBitmap(): Bitmap? = latestBitmap
 
-    // Preference: ask SDK to deliver oriented/rotated frames (if SDK supports it)
-    fun setPreferSdkRotation(prefer: Boolean) {
-        sdkManager?.setPreferSdkRotation(prefer)
-    }
-
-    fun isPreferSdkRotation(): Boolean {
-        return sdkManager?.isPreferSdkRotation() ?: false
-    }
-
-    fun getBatteryLevel(): Int {
-        return sdkManager?.getBatteryLevel() ?: -1
-    }
-
-    fun isBatteryCharging(): Boolean {
-        return sdkManager?.isBatteryCharging() ?: false
-    }
+    // Stubs for removed features
+    fun setPreferSdkRotation(prefer: Boolean) { /* No-op */ }
+    fun isPreferSdkRotation(): Boolean = false
+    fun getBatteryLevel(): Int = -1
+    fun isBatteryCharging(): Boolean = false
+    fun setPalette(name: String) { /* No-op */ }
+    fun getAvailablePalettes(): List<String> = emptyList()
     
     /**
      * Initialize the FLIR SDK
      */
     fun init(context: Context) {
-        // Store react context for event emission if it's a React context
-        // Always update if we get a valid ReactContext (in case previous was stale)
         if (context is ReactContext) {
-            Log.d(TAG, "[Flir-BRIDGE-LOAD] Storing ReactContext for event emission: ${context.javaClass.simpleName}")
             reactContext = context
-        } else {
-            Log.d(TAG, "[Flir-BRIDGE-LOAD] Context is not ReactContext: ${context.javaClass.simpleName}")
         }
         
-        if (isInitialized) {
-            Log.d(TAG, "[Flir-BRIDGE-LOAD] Already initialized")
-            return
-        }
-        
-        appContext = context.applicationContext
+        if (isInitialized) return
         
         sdkManager = FlirSdkManager.getInstance(context)
         sdkManager?.setListener(sdkListener)
         sdkManager?.initialize()
         
         isInitialized = true
-        Log.i(TAG, "[Flir-BRIDGE-LOAD] FlirManager initialized")
+        Log.i(TAG, "FlirManager initialized")
     }
     
     /**
-     * Start scanning for devices (USB, Network, Emulator - ALL types)
+     * Start scanning
      */
     fun startDiscovery(retry: Boolean = false) {
-        Log.i(TAG, "[Flir-BRIDGE-DISCOVERY] startDiscovery(retry=$retry)")
-        
-        if (!isInitialized && appContext != null) {
-            init(appContext!!)
+        if (!isInitialized && reactContext != null) {
+            init(reactContext!!)
         }
         
-        if (isScanning && !retry) {
-            Log.d(TAG, "Already scanning")
-            return
-        }
+        if (isScanning && !retry) return
         
         isScanning = true
         emitDeviceState("discovering")
@@ -141,13 +119,12 @@ object FlirManager {
      * Stop scanning
      */
     fun stopDiscovery() {
-        Log.i(TAG, "[Flir-BRIDGE-DISCOVERY] stopDiscovery")
-        sdkManager?.stop()
+        sdkManager?.stopScan()
         isScanning = false
     }
     
     /**
-     * Connect to a device by ID
+     * Connect to a device
      */
     fun connectToDevice(deviceId: String) {
         Log.i(TAG, "connectToDevice: $deviceId")
@@ -156,52 +133,23 @@ object FlirManager {
         val identity = devices.find { it.deviceId == deviceId }
         
         if (identity != null) {
-            Log.i(TAG, "[Flir-BRIDGE-CONNECTION] Connecting to found device: $deviceId")
+            shouldProcessFrames.set(true)
             sdkManager?.connect(identity)
         } else {
-            Log.e(TAG, "[Flir-BRIDGE-ERROR] Device not found: $deviceId")
+            Log.e(TAG, "Device not found: $deviceId")
             emitError("Device not found: $deviceId")
         }
     }
-    
-    /**
-     * Switch to a different device
-     */
+
     fun switchToDevice(deviceId: String) {
-        if (deviceId == connectedDeviceId) {
-            Log.d(TAG, "Already connected to: $deviceId")
-            return
-        }
-        
-        // Disconnect current and connect new
-        if (isConnected) {
-            sdkManager?.disconnect()
-        }
         connectToDevice(deviceId)
     }
     
     /**
-     * Start streaming from connected device
-     */
-    fun startStream() {
-        Log.i(TAG, "startStream")
-        sdkManager?.startStream()
-    }
-    
-    /**
-     * Stop streaming
-     */
-    fun stopStream() {
-        Log.i(TAG, "[Flir-BRIDGE-STREAMING] stopStream")
-        sdkManager?.stopStream()
-        isStreaming = false
-    }
-    
-    /**
-     * Disconnect from current device
+     * Disconnect
      */
     fun disconnect() {
-        Log.i(TAG, "[Flir-BRIDGE-DISCONNECT] disconnect")
+        shouldProcessFrames.set(false)
         sdkManager?.disconnect()
         isConnected = false
         isStreaming = false
@@ -213,49 +161,33 @@ object FlirManager {
      * Stop everything
      */
     fun stop() {
-        Log.i(TAG, "stop")
-        stopStream()
+        shouldProcessFrames.set(false)
         disconnect()
         stopDiscovery()
         latestBitmap = null
     }
     
+    // Stub legacy methods
+    fun startStream() { /* handled automatically by connect */ }
+    fun stopStream() { sdkManager?.stopStream() }
+    
     /**
-     * Get temperature at point in image coordinates
+     * Get temperature
      */
     fun getTemperatureAt(x: Int, y: Int): Double? {
-        return sdkManager?.getTemperatureAt(x, y)?.takeIf { !it.isNaN() }
+        val temp = sdkManager?.getTemperatureAt(x, y)
+        return if (temp != null && !temp.isNaN()) temp else null
     }
     
-    /**
-     * Get temperature at normalized coordinates (0.0 to 1.0)
-     */
-    fun getTemperatureAtNormalized(normalizedX: Double, normalizedY: Double): Double? {
-        return sdkManager?.getTemperatureAtNormalized(normalizedX, normalizedY)?.takeIf { !it.isNaN() }
+    fun getTemperatureAtNormalized(nx: Double, ny: Double): Double? {
+        // Not implemented in simplified version
+        return null 
     }
     
-    /**
-     * Alias for getTemperatureAt
-     */
     fun getTemperatureAtPoint(x: Int, y: Int): Double? = getTemperatureAt(x, y)
     
     /**
-     * Set palette
-     */
-    fun setPalette(name: String) {
-        Log.d(TAG, "setPalette: $name")
-        sdkManager?.setPalette(name)
-    }
-    
-    /**
-     * Get available palettes
-     */
-    fun getAvailablePalettes(): List<String> {
-        return sdkManager?.availablePalettes ?: emptyList()
-    }
-    
-    /**
-     * Get list of discovered devices
+     * Get discovered devices
      */
     fun getDiscoveredDevices(): List<Identity> {
         return sdkManager?.discoveredDevices ?: emptyList()
@@ -269,14 +201,11 @@ object FlirManager {
     fun isEmulator(): Boolean = connectedDeviceName?.contains("EMULAT", ignoreCase = true) == true
     fun isDeviceConnected(): Boolean = isConnected
     
-    /**
-     * Get connected device info
-     */
     fun getConnectedDeviceInfo(): String {
         return connectedDeviceName ?: "Not connected"
     }
     
-    /**
+     /**
      * Get latest frame as file path (for RN)
      */
     fun getLatestFramePath(): String? {
@@ -288,7 +217,6 @@ object FlirManager {
             }
             file.absolutePath
         } catch (t: Throwable) {
-            Log.e(TAG, "Failed to save frame", t)
             null
         }
     }
@@ -296,30 +224,24 @@ object FlirManager {
     // SDK Listener
     private val sdkListener = object : FlirSdkManager.Listener {
         override fun onDeviceFound(identity: Identity) {
-            Log.i(TAG, "Device found: ${identity.deviceId}")
+            // Devices updated event handles the list, but we can log unique finds
         }
         
         override fun onDeviceListUpdated(devices: List<Identity>) {
-            Log.i(TAG, "Devices updated: ${devices.size} found")
-            devices.forEach { 
-                Log.d(TAG, "  - ${it.deviceId} (${it.communicationInterface})")
-            }
+            Log.d(TAG, "Devices found: ${devices.size}")
             emitDevicesFound(devices)
         }
         
-        override fun onConnected(identity: Identity?) {
-            Log.i(TAG, "Connected to: ${identity?.deviceId}")
+        override fun onConnected(identity: Identity) {
+            Log.i(TAG, "Connected to: ${identity.deviceId}")
             isConnected = true
-            connectedDeviceId = identity?.deviceId
-            connectedDeviceName = identity?.deviceId
+            connectedDeviceId = identity.deviceId
+            connectedDeviceName = identity.deviceId
             emitDeviceState("connected")
-            
-            // Auto-start streaming when connected
-            startStream()
         }
         
         override fun onDisconnected() {
-            Log.i(TAG, "[Flir-BRIDGE-DISCONNECT] Disconnected callback")
+            Log.i(TAG, "Disconnected")
             isConnected = false
             isStreaming = false
             connectedDeviceId = null
@@ -328,53 +250,55 @@ object FlirManager {
         }
         
         override fun onFrame(bitmap: Bitmap) {
-            if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) {
+            // IMMEDIATE STOP CHECK
+            if (!shouldProcessFrames.get()) {
                 return
             }
-            
+
+            // THROTTLE: Limit to ~15 FPS to prevent UI thread flooding
+            val now = System.currentTimeMillis()
+            if (now - lastEmitMs.get() < 66) { // 66ms ~= 15 FPS
+                return
+            }
+            lastEmitMs.set(now)
+
             latestBitmap = bitmap
-            isStreaming = true
             
-            // Notify texture callback (for GL rendering)
+            // If this is the first frame, notify JS that we are now streaming
+            if (!isStreaming) {
+                isStreaming = true
+                emitDeviceState("streaming")
+            }
+            
+            // NON-BLOCKING TEXTURE UPDATE
             if (textureCallback != null) {
-                textureCallback?.onTextureUpdate(bitmap, 0)
-            } else {
-                // Log only occasionally to avoid spam
-                if (System.currentTimeMillis() % 5000 < 100) {
-                    Log.w(TAG, "⚠️ Frame received but textureCallback is null - texture won't update!")
+                // We use try-lock to ensure we don't pile up parallel calls, 
+                // though usually onFrame is serial. 
+                if (isUpdatingTexture.compareAndSet(false, true)) {
+                    try {
+                        textureCallback?.onTextureUpdate(bitmap, 0)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Texture update failed", e)
+                    } finally {
+                        isUpdatingTexture.set(false)
+                    }
                 }
             }
             
-            // Rate-limited RN event
-            emitFrameToReactNative(bitmap)
+            // Notify RN - disabled
+            // emitFrameToReactNative(bitmap)
         }
         
         override fun onError(message: String) {
-            Log.e(TAG, "Error: $message")
-            
-            // Parse error code if present (format: "CODE: message")
-            val parts = message.split(": ", limit = 2)
-            val errorCode = if (parts.size == 2) parts[0] else "FLIR_ERROR"
-            val errorMessage = if (parts.size == 2) parts[1] else message
-            
-            // Auto-disable streaming on critical errors to allow retry
-            if (errorCode.contains("NATIVE") || errorCode.contains("INIT")) {
-                Log.w(TAG, "[Flir-BRIDGE-ERROR] Critical error detected, stopping stream")
-                isStreaming = false
-                stopStream()
-            }
-            
-            emitError(errorCode, errorMessage)
-        }
-
-        override fun onBatteryUpdated(level: Int, isCharging: Boolean) {
-            Log.d(TAG, "[Flir-BRIDGE-BATTERY] onBatteryUpdated: level=$level charging=$isCharging")
-            emitBatteryState(level, isCharging)
+            emitError(message)
         }
     }
     
-    // React Native event emitters
+    // React Native Emitters
+    
     private fun emitFrameToReactNative(bitmap: Bitmap) {
+        // PERF: Disabled to reduce bridge traffic
+        /*
         val now = System.currentTimeMillis()
         if (now - lastEmitMs.get() < minEmitIntervalMs) return
         lastEmitMs.set(now)
@@ -388,18 +312,12 @@ object FlirManager {
             }
             ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 .emit("FlirFrameReceived", params)
-        } catch (e: Exception) {
-            // Ignore
-        }
+        } catch (e: Exception) { }
+        */
     }
     
     private fun emitDeviceState(state: String) {
-        val ctx = reactContext
-        if (ctx == null) {
-            Log.e(TAG, "[Flir-BRIDGE-ERROR] Cannot emit FlirDeviceConnected($state) - reactContext is null!")
-            return
-        }
-        Log.d(TAG, "[Flir-BRIDGE-CONNECTION] Emitting FlirDeviceConnected: $state")
+        val ctx = reactContext ?: return
         try {
             val params = Arguments.createMap().apply {
                 putString("state", state)
@@ -407,28 +325,20 @@ object FlirManager {
                 putBoolean("isStreaming", isStreaming)
                 putBoolean("isEmulator", isEmulator())
                 connectedDeviceName?.let { putString("deviceName", it) }
-                connectedDeviceId?.let { putString("deviceId", it) }
             }
             ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 .emit("FlirDeviceConnected", params)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to emit device state", e)
-        }
+        } catch (e: Exception) { }
     }
     
     private fun emitDevicesFound(devices: List<Identity>) {
-        val ctx = reactContext
-        if (ctx == null) {
-            Log.e(TAG, "Cannot emit FlirDevicesFound - reactContext is null!")
-            return
-        }
-        Log.d(TAG, "Emitting FlirDevicesFound with ${devices.size} devices")
+        val ctx = reactContext ?: return
         try {
             val params = Arguments.createMap()
             val devicesArray: WritableArray = Arguments.createArray()
             
             devices.forEach { identity ->
-                val deviceMap: WritableMap = Arguments.createMap().apply {
+                val deviceMap = Arguments.createMap().apply {
                     putString("id", identity.deviceId)
                     putString("name", identity.deviceId)
                     putString("communicationType", identity.communicationInterface.name)
@@ -442,97 +352,34 @@ object FlirManager {
             
             ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 .emit("FlirDevicesFound", params)
-            Log.d(TAG, "[Flir-BRIDGE-DISCOVERY] Successfully emitted FlirDevicesFound (${devices.size} devices)")
-        } catch (e: Exception) {
-            Log.e(TAG, "[Flir-BRIDGE-ERROR] Failed to emit devices found", e)
-        }
-    }
-
-    private fun emitBatteryState(level: Int, isCharging: Boolean) {
-        val ctx = reactContext
-        if (ctx == null) {
-            Log.w(TAG, "Cannot emit FlirBatteryUpdated - reactContext is null!")
-            return
-        }
-        try {
-            val params = Arguments.createMap().apply {
-                putInt("level", level)
-                putBoolean("isCharging", isCharging)
-            }
-            ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                .emit("FlirBatteryUpdated", params)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to emit battery state", e)
-        }
+        } catch (e: Exception) { }
     }
     
     private fun emitError(message: String) {
-        emitError("FLIR_ERROR", message)
-    }
-    
-    private fun emitError(errorCode: String, message: String) {
         val ctx = reactContext ?: return
         try {
             val params = Arguments.createMap().apply {
-                putString("code", errorCode)
                 putString("error", message)
-                putString("message", message) // For backward compatibility
-                putBoolean("canRetry", errorCode.contains("NATIVE") || errorCode.contains("INIT"))
+                putString("message", message)
             }
             ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 .emit("FlirError", params)
-            Log.d(TAG, "[Flir-BRIDGE-ERROR] Emitted FlirError: [$errorCode] $message")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to emit error", e)
-        }
+        } catch (e: Exception) { }
     }
     
-    // Legacy compatibility
-    @JvmStatic
-    fun getInstance(): FlirManager = this
+    // Legacy methods placeholders
+    @JvmStatic fun getInstance(): FlirManager = this
     
     interface DiscoveryCallback {
         fun onDeviceFound(deviceName: String)
         fun onDiscoveryTimeout()
         fun onEmulatorEnabled()
     }
-    
-    private var discoveryCallback: DiscoveryCallback? = null
-    
-    fun setDiscoveryCallback(callback: DiscoveryCallback?) {
-        discoveryCallback = callback
-    }
-    
-    // Legacy methods - no-ops or simple forwards
-    fun setEmulatorMode(enabled: Boolean) {
-        Log.d(TAG, "setEmulatorMode($enabled) - legacy, use startDiscovery() instead")
-        if (enabled) {
-            startDiscovery(retry = true)
-        }
-    }
-    
-    fun enableEmulatorMode() = setEmulatorMode(true)
-    
-    fun forceEmulatorMode(type: String = "FLIR_ONE_EDGE") {
-        Log.d(TAG, "forceEmulatorMode($type) - legacy, use startDiscovery() instead")
-        startDiscovery(retry = true)
-    }
-    
-    fun setPreferredEmulatorType(type: String) {
-        Log.d(TAG, "setPreferredEmulatorType($type) - legacy, no longer used")
-    }
-    
-    fun updateAcol(value: Float) {
-        // No-op - not used in simplified version
-    }
-    
-    /**
-     * Cleanup
-     */
-    fun destroy() {
-        stop()
-        sdkManager?.destroy()
-        sdkManager = null
-        isInitialized = false
-    }
+    fun setDiscoveryCallback(callback: DiscoveryCallback?) { /* No-op */ }
+    fun setEmulatorMode(enabled: Boolean) { startDiscovery() }
+    fun enableEmulatorMode() = startDiscovery()
+    fun forceEmulatorMode(type: String = "FLIR_ONE_EDGE") { startDiscovery() }
+    fun setPreferredEmulatorType(type: String) { }
+    fun updateAcol(value: Float) { }
+    fun destroy() { stop() }
 }

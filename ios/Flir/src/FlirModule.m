@@ -7,12 +7,14 @@
 //
 
 #import "FlirModule.h"
+
 #import "FlirEventEmitter.h"
 #import "FlirState.h"
 #import <React/RCTBridge.h>
 #import <React/RCTLog.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <stdatomic.h>
 
 // Import Swift-generated header for FlirManagerDelegate protocol
 #if __has_include("Flir-Swift.h")
@@ -36,61 +38,7 @@ static id flir_manager_shared(void) {
   return msgSend0((id)cls, sel);
 }
 
-// Helper for primitives
-static double flir_getTemperatureAtPoint(int x, int y) {
-  id inst = flir_manager_shared();
-  if (!inst)
-    return NAN;
-  SEL sel = sel_registerName("getTemperatureAtPoint:y:");
-  if (![inst respondsToSelector:sel])
-    return NAN;
-  double (*msgSend2)(id, SEL, int, int) =
-      (double (*)(id, SEL, int, int))objc_msgSend;
-  return msgSend2(inst, sel, x, y);
-}
-
-static int flir_getBatteryLevel(void) {
-  id inst = flir_manager_shared();
-  if (!inst)
-    return -1;
-  SEL sel = sel_registerName("getBatteryLevel");
-  if (![inst respondsToSelector:sel])
-    return -1;
-  int (*msgSend0)(id, SEL) = (int (*)(id, SEL))objc_msgSend;
-  return msgSend0(inst, sel);
-}
-
-static BOOL flir_isBatteryCharging(void) {
-  id inst = flir_manager_shared();
-  if (!inst)
-    return NO;
-  SEL sel = sel_registerName("isBatteryCharging");
-  if (![inst respondsToSelector:sel])
-    return NO;
-  BOOL (*msgSend0)(id, SEL) = (BOOL (*)(id, SEL))objc_msgSend;
-  return msgSend0(inst, sel);
-}
-static void flir_setPreferSdkRotation(BOOL prefer) {
-  id inst = flir_manager_shared();
-  if (!inst)
-    return;
-  SEL sel = sel_registerName("setPreferSdkRotation:");
-  if (![inst respondsToSelector:sel])
-    return;
-  void (*msgSend1)(id, SEL, BOOL) = (void (*)(id, SEL, BOOL))objc_msgSend;
-  msgSend1(inst, sel, prefer);
-}
-
-static BOOL flir_isPreferSdkRotation(void) {
-  id inst = flir_manager_shared();
-  if (!inst)
-    return NO;
-  SEL sel = sel_registerName("isPreferSdkRotation");
-  if (![inst respondsToSelector:sel])
-    return NO;
-  BOOL (*msgSend0)(id, SEL) = (BOOL (*)(id, SEL))objc_msgSend;
-  return msgSend0(inst, sel);
-}
+// ... helper primitives skipped in replace ...
 
 @interface FlirModule () <FlirManagerDelegate>
 @property(nonatomic, copy) RCTPromiseResolveBlock connectResolve;
@@ -99,6 +47,10 @@ static BOOL flir_isPreferSdkRotation(void) {
 
 @implementation FlirModule {
   NSInteger _listenerCount;
+  atomic_bool _isCapturing;
+  NSTimeInterval _lastBitmapEventTime;
+  NSTimeInterval _lastStateEventTime;
+  NSString *_lastStateValue;
 }
 
 RCT_EXPORT_MODULE(FlirModule);
@@ -110,6 +62,7 @@ RCT_EXPORT_MODULE(FlirModule);
 - (instancetype)init {
   if (self = [super init]) {
     _listenerCount = 0;
+    atomic_store(&_isCapturing, false);
     // Wire up delegate
     id manager = flir_manager_shared();
     if (manager) {
@@ -124,8 +77,8 @@ RCT_EXPORT_MODULE(FlirModule);
 - (NSArray<NSString *> *)supportedEvents {
   return @[
     @"FlirDeviceConnected", @"FlirDeviceDisconnected", @"FlirDevicesFound",
-    @"FlirFrameReceived", @"FlirFrameBitmapAvailable", @"FlirError", @"FlirStateChanged",
-    @"FlirBatteryUpdated"
+    @"FlirFrameReceived", @"FlirFrameBitmapAvailable", @"FlirError",
+    @"FlirStateChanged", @"FlirBatteryUpdated"
   ];
 }
 
@@ -140,23 +93,27 @@ RCT_EXPORT_MODULE(FlirModule);
 
 RCT_EXPORT_METHOD(addListener : (NSString *)eventName) {
   _listenerCount++;
-  NSLog(@"[FlirModule] addListener: %@ (count: %ld)", eventName, (long)_listenerCount);
-  
+  NSLog(@"[FlirModule] addListener: %@ (count: %ld)", eventName,
+        (long)_listenerCount);
+
   // CRITICAL: Call parent to register with RCTEventEmitter's internal tracking
   // Without this, sendEventWithName will show "no listeners registered" warning
   // and may not deliver events properly
   [super addListener:eventName];
-  
-  // When FlirDevicesFound listener is added, immediately emit current device list
-  // This handles the case where discovery happened before React Native mounted
+
+  // When FlirDevicesFound listener is added, immediately emit current device
+  // list This handles the case where discovery happened before React Native
+  // mounted
   if ([eventName isEqualToString:@"FlirDevicesFound"]) {
     dispatch_async(dispatch_get_main_queue(), ^{
       id manager = flir_manager_shared();
       if (manager) {
-        NSArray *devices = ((NSArray * (*)(id, SEL))
-                           objc_msgSend)(manager, sel_registerName("getDiscoveredDevices"));
+        NSArray *devices = ((NSArray * (*)(id, SEL)) objc_msgSend)(
+            manager, sel_registerName("getDiscoveredDevices"));
         if (devices && devices.count > 0) {
-          NSLog(@"[FlirModule] addListener - re-emitting %lu discovered devices", (unsigned long)devices.count);
+          NSLog(
+              @"[FlirModule] addListener - re-emitting %lu discovered devices",
+              (unsigned long)devices.count);
           [self onDevicesFound:devices];
         }
       }
@@ -166,21 +123,26 @@ RCT_EXPORT_METHOD(addListener : (NSString *)eventName) {
 
 RCT_EXPORT_METHOD(removeListeners : (NSInteger)count) {
   _listenerCount -= count;
-  if (_listenerCount < 0) _listenerCount = 0;
-  NSLog(@"[FlirModule] removeListeners: %ld (remaining: %ld)", (long)count, (long)_listenerCount);
-  
-  // CRITICAL: Call parent to unregister with RCTEventEmitter's internal tracking
+  if (_listenerCount < 0)
+    _listenerCount = 0;
+  NSLog(@"[FlirModule] removeListeners: %ld (remaining: %ld)", (long)count,
+        (long)_listenerCount);
+
+  // CRITICAL: Call parent to unregister with RCTEventEmitter's internal
+  // tracking
   [super removeListeners:count];
 }
 
 + (void)emitBatteryUpdateWithLevel:(NSInteger)level charging:(BOOL)charging {
   NSDictionary *payload = @{@"level" : @(level), @"isCharging" : @(charging)};
-  NSLog(@"[FlirModule] Emitting battery update - level: %ld, charging: %d", (long)level, charging);
-  
+  NSLog(@"[FlirModule] Emitting battery update - level: %ld, charging: %d",
+        (long)level, charging);
+
   // Note: This is a class method, so we need to get the module instance
-  // For now, we'll just log - in production you'd need to get the module instance
-  // or convert this to an instance method
-  // [[FlirModule sharedInstance] sendEventWithName:@"FlirBatteryUpdated" body:payload];
+  // For now, we'll just log - in production you'd need to get the module
+  // instance or convert this to an instance method
+  // [[FlirModule sharedInstance] sendEventWithName:@"FlirBatteryUpdated"
+  // body:payload];
 }
 
 #pragma mark - Methods
@@ -209,10 +171,12 @@ RCT_EXPORT_METHOD(startDiscovery : (RCTPromiseResolveBlock)
     id manager = flir_manager_shared();
     if (manager &&
         [manager respondsToSelector:sel_registerName("startDiscovery")]) {
-      NSLog(@"[FlirModule] [%@] ⏱ Calling FlirManager.startDiscovery", [NSDate date]);
+      NSLog(@"[FlirModule] [%@] ⏱ Calling FlirManager.startDiscovery",
+            [NSDate date]);
       ((void (*)(id, SEL))objc_msgSend)(manager,
                                         sel_registerName("startDiscovery"));
-      NSLog(@"[FlirModule] [%@] ⏱ FlirManager.startDiscovery returned", [NSDate date]);
+      NSLog(@"[FlirModule] [%@] ⏱ FlirManager.startDiscovery returned",
+            [NSDate date]);
     }
     resolve(@(YES));
   });
@@ -253,23 +217,30 @@ RCT_EXPORT_METHOD(getDiscoveredDevices : (RCTPromiseResolveBlock)
 
 RCT_EXPORT_METHOD(connectToDevice : (NSString *)deviceId resolver : (
     RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
-  NSLog(@"[FlirModule] [%@] ⏱ RN->connectToDevice called for: %@", [NSDate date], deviceId);
+  NSLog(@"[FlirModule] [%@] ⏱ RN->connectToDevice called for: %@",
+        [NSDate date], deviceId);
   dispatch_async(dispatch_get_main_queue(), ^{
     id manager = flir_manager_shared();
     if (manager &&
         [manager respondsToSelector:sel_registerName("connectToDevice:")]) {
-      NSLog(@"[FlirModule] [%@] ⏱ Calling FlirManager.connectToDevice", [NSDate date]);
-      
+      NSLog(@"[FlirModule] [%@] ⏱ Calling FlirManager.connectToDevice",
+            [NSDate date]);
+
       // Store callbacks for event-driven updates (but don't block on them)
-      self.connectResolve = nil;  // Don't use promise for blocking
+      self.connectResolve = nil; // Don't use promise for blocking
       self.connectReject = nil;
-      
+
+      // Enable capturing
+      atomic_store(&_isCapturing, true);
+
       // Initiate connection asynchronously
       ((void (*)(id, SEL, id))objc_msgSend)(
           manager, sel_registerName("connectToDevice:"), deviceId);
-      
-      NSLog(@"[FlirModule] [%@] ⏱ FlirManager.connectToDevice returned (async started)", [NSDate date]);
-      
+
+      NSLog(@"[FlirModule] [%@] ⏱ FlirManager.connectToDevice returned (async "
+            @"started)",
+            [NSDate date]);
+
       // Resolve immediately - connection status will come via events
       resolve(@(YES));
     } else {
@@ -285,6 +256,8 @@ RCT_EXPORT_METHOD(disconnect : (RCTPromiseResolveBlock)
     id manager = flir_manager_shared();
     if (manager &&
         [manager respondsToSelector:sel_registerName("disconnect")]) {
+      atomic_store(&_isCapturing, false);
+      [[FlirState shared] reset];
       ((void (*)(id, SEL))objc_msgSend)(manager,
                                         sel_registerName("disconnect"));
     }
@@ -297,6 +270,8 @@ RCT_EXPORT_METHOD(stopFlir : (RCTPromiseResolveBlock)
   dispatch_async(dispatch_get_main_queue(), ^{
     id manager = flir_manager_shared();
     if (manager && [manager respondsToSelector:sel_registerName("stop")]) {
+      atomic_store(&_isCapturing, false);
+      [[FlirState shared] reset];
       ((void (*)(id, SEL))objc_msgSend)(manager, sel_registerName("stop"));
     }
     resolve(@(YES));
@@ -307,18 +282,21 @@ RCT_EXPORT_METHOD(startEmulator : (NSString *)emulatorType resolver : (
     RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
     NSLog(@"[FlirModule] startEmulator called for type: %@", emulatorType);
-    
+
     id manager = flir_manager_shared();
     if (manager && [manager respondsToSelector:sel_registerName(
                                                    "startEmulatorWithType:")]) {
       // Store callbacks for event-driven updates (but don't block on them)
       self.connectResolve = nil;
       self.connectReject = nil;
-      
+
+      // Enable capturing
+      atomic_store(&_isCapturing, true);
+
       // Initiate emulator start asynchronously
       ((void (*)(id, SEL, id))objc_msgSend)(
           manager, sel_registerName("startEmulatorWithType:"), emulatorType);
-      
+
       // Resolve immediately - connection status will come via events
       resolve(@(YES));
     } else {
@@ -335,7 +313,15 @@ RCT_EXPORT_METHOD(getTemperatureAt : (nonnull NSNumber *)x y : (
     nonnull NSNumber *)y resolver : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
-    double temp = flir_getTemperatureAtPoint([x intValue], [y intValue]);
+    id manager = flir_manager_shared();
+    double temp = NAN;
+    if (manager &&
+        [manager
+            respondsToSelector:sel_registerName("getTemperatureAtPoint:y:")]) {
+      temp = ((double (*)(id, SEL, int, int))objc_msgSend)(
+          manager, sel_registerName("getTemperatureAtPoint:y:"), [x intValue],
+          [y intValue]);
+    }
     if (isnan(temp)) {
       resolve([NSNull null]);
     } else {
@@ -368,14 +354,18 @@ RCT_EXPORT_METHOD(isEmulator : (RCTPromiseResolveBlock)
   });
 }
 
-RCT_EXPORT_METHOD(getLatestFrameBitmap : (RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
+RCT_EXPORT_METHOD(getLatestFrameBitmap : (RCTPromiseResolveBlock)
+                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
     id manager = flir_manager_shared();
-    if (!manager || ![manager respondsToSelector:sel_registerName("latestFrameBitmapBase64")]) {
+    if (!manager ||
+        ![manager
+            respondsToSelector:sel_registerName("latestFrameBitmapBase64")]) {
       resolve([NSNull null]);
       return;
     }
-    NSDictionary *dict = ((NSDictionary * (*)(id, SEL)) objc_msgSend)(manager, sel_registerName("latestFrameBitmapBase64"));
+    NSDictionary *dict = ((NSDictionary * (*)(id, SEL)) objc_msgSend)(
+        manager, sel_registerName("latestFrameBitmapBase64"));
     if (!dict) {
       resolve([NSNull null]);
     } else {
@@ -426,7 +416,13 @@ RCT_EXPORT_METHOD(getSDKStatus : (RCTPromiseResolveBlock)
 RCT_EXPORT_METHOD(getBatteryLevel : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
-    int level = flir_getBatteryLevel();
+    id manager = flir_manager_shared();
+    int level = -1;
+    if (manager &&
+        [manager respondsToSelector:sel_registerName("getBatteryLevel")]) {
+      level = ((int (*)(id, SEL))objc_msgSend)(
+          manager, sel_registerName("getBatteryLevel"));
+    }
     resolve(@(level));
   });
 }
@@ -434,7 +430,13 @@ RCT_EXPORT_METHOD(getBatteryLevel : (RCTPromiseResolveBlock)
 RCT_EXPORT_METHOD(isBatteryCharging : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
-    BOOL ch = flir_isBatteryCharging();
+    id manager = flir_manager_shared();
+    BOOL ch = NO;
+    if (manager &&
+        [manager respondsToSelector:sel_registerName("isBatteryCharging")]) {
+      ch = ((BOOL (*)(id, SEL))objc_msgSend)(
+          manager, sel_registerName("isBatteryCharging"));
+    }
     resolve(@(ch));
   });
 }
@@ -442,7 +444,12 @@ RCT_EXPORT_METHOD(isBatteryCharging : (RCTPromiseResolveBlock)
 RCT_EXPORT_METHOD(setPreferSdkRotation : (BOOL)prefer resolver : (
     RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
-    flir_setPreferSdkRotation(prefer);
+    id manager = flir_manager_shared();
+    if (manager && [manager respondsToSelector:sel_registerName(
+                                                   "setPreferSdkRotation:")]) {
+      ((void (*)(id, SEL, BOOL))objc_msgSend)(
+          manager, sel_registerName("setPreferSdkRotation:"), prefer);
+    }
     resolve(@(YES));
   });
 }
@@ -450,7 +457,13 @@ RCT_EXPORT_METHOD(setPreferSdkRotation : (BOOL)prefer resolver : (
 RCT_EXPORT_METHOD(isPreferSdkRotation : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
-    BOOL v = flir_isPreferSdkRotation();
+    id manager = flir_manager_shared();
+    BOOL v = NO;
+    if (manager &&
+        [manager respondsToSelector:sel_registerName("isPreferSdkRotation")]) {
+      v = ((BOOL (*)(id, SEL))objc_msgSend)(
+          manager, sel_registerName("isPreferSdkRotation"));
+    }
     resolve(@(v));
   });
 }
@@ -465,15 +478,17 @@ RCT_EXPORT_METHOD(isPreferSdkRotation : (RCTPromiseResolveBlock)
                           objc_msgSend)(d, sel_registerName("toDictionary"))];
     }
   }
-  
-  NSLog(@"[FlirModule] onDevicesFound - %lu devices, listenerCount: %ld", (unsigned long)arr.count, (long)_listenerCount);
-  
+
+  NSLog(@"[FlirModule] onDevicesFound - %lu devices, listenerCount: %ld",
+        (unsigned long)arr.count, (long)_listenerCount);
+
   if (_listenerCount > 0) {
     NSLog(@"[FlirModule] emitting FlirDevicesFound event");
-    [self sendEventWithName:@"FlirDevicesFound" 
+    [self sendEventWithName:@"FlirDevicesFound"
                        body:@{@"devices" : arr, @"count" : @(arr.count)}];
   } else {
-    NSLog(@"[FlirModule] ⚠️ No listeners registered yet - devices will be re-emitted when listener is added");
+    NSLog(@"[FlirModule] ⚠️ No listeners registered yet - devices will be "
+          @"re-emitted when listener is added");
   }
 }
 
@@ -485,43 +500,67 @@ RCT_EXPORT_METHOD(isPreferSdkRotation : (RCTPromiseResolveBlock)
         addEntriesFromDictionary:((NSDictionary * (*)(id, SEL)) objc_msgSend)(
                                      device, sel_registerName("toDictionary"))];
   }
-  
+
   // Add state info to match Android's FlirDeviceConnected event format
   [body setObject:@"connected" forKey:@"state"];
   [body setObject:@(YES) forKey:@"isConnected"];
-  [body setObject:@(NO) forKey:@"isStreaming"];  // streaming starts after connection
+  [body setObject:@(NO)
+           forKey:@"isStreaming"]; // streaming starts after connection
   // isEmulator info should be in device dictionary already from toDictionary
 
-  NSLog(@"[FlirModule] onDeviceConnected - emitting FlirDeviceConnected event with state info");
+  NSLog(@"[FlirModule] onDeviceConnected - emitting FlirDeviceConnected event "
+        @"with state info");
   [self sendEventWithName:@"FlirDeviceConnected" body:body];
 }
 
 - (void)onDeviceDisconnected {
-  NSLog(@"[FlirModule] onDeviceDisconnected - emitting FlirDeviceDisconnected event");
+  NSLog(@"[FlirModule] onDeviceDisconnected - emitting FlirDeviceDisconnected "
+        @"event");
   [self sendEventWithName:@"FlirDeviceDisconnected" body:@{}];
 }
 
 - (void)onFrameReceived:(UIImage *)image
                   width:(NSInteger)width
                  height:(NSInteger)height {
-  // Also emit event for JS consumers (though slow, some might use it)
-  [self sendEventWithName:@"FlirFrameReceived"
+
+  NSLog(@"[FLIR-TRACE 6️⃣] onFrameReceived in FlirModule - _isCapturing=%d image=%@", 
+        atomic_load(&_isCapturing), image);
+
+  if (!atomic_load(&_isCapturing)) {
+    NSLog(@"[FLIR-TRACE ❌] _isCapturing is false - frame DROPPED");
+    return;
+  }
+
+  NSLog(@"[FLIR-TRACE 7️⃣] Calling FlirState.updateFrame with image %ldx%ld", 
+        (long)width, (long)height);
+  
+  // CRITICAL: Update shared state so native preview (FlirPreviewView) receives
+  // the texture
+  [[FlirState shared] updateFrame:image];
+
+  NSLog(@"[FLIR-TRACE 8️⃣] FlirState.updateFrame completed");
+}
+
+- (void)onFrameReceivedRaw:(NSData *)data
+                     width:(NSInteger)width
+                    height:(NSInteger)height
+               bytesPerRow:(NSInteger)bytesPerRow
+                 timestamp:(double)timestamp {
+  // THROTTLE: Emit at most 5 events per second (200ms interval)
+  NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+  if (now - _lastBitmapEventTime < 0.2) {
+    return; // Drop this event to prevent bridge flooding
+  }
+  _lastBitmapEventTime = now;
+
+  // Emit a lightweight event to notify JS that a raw bitmap is available
+  [self sendEventWithName:@"FlirFrameBitmapAvailable"
                      body:@{
                        @"width" : @(width),
                        @"height" : @(height),
-                       @"timestamp" :
-                           @([[NSDate date] timeIntervalSince1970] * 1000)
+                       @"bytesPerRow" : @(bytesPerRow),
+                       @"timestamp" : @(timestamp)
                      }];
-}
-
-- (void)onFrameReceivedRaw:(NSData *)data width:(NSInteger)width height:(NSInteger)height bytesPerRow:(NSInteger)bytesPerRow timestamp:(double)timestamp {
-  // Emit a lightweight event to notify JS that a raw bitmap is available; raw bytes are available via getLatestFrameBitmap()
-  [self sendEventWithName:@"FlirFrameBitmapAvailable" body:@{
-    @"width": @(width),
-    @"height": @(height),
-    @"bytesPerRow": @(bytesPerRow),
-    @"timestamp": @(timestamp)
-  }];
 }
 
 - (void)onError:(NSString *)message {
@@ -534,13 +573,24 @@ RCT_EXPORT_METHOD(isPreferSdkRotation : (RCTPromiseResolveBlock)
            isConnected:(BOOL)isConnected
            isStreaming:(BOOL)isStreaming
             isEmulator:(BOOL)isEmulator {
+  // THROTTLE: Avoid duplicate state events within 100ms
+  NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+  if ([state isEqualToString:_lastStateValue] &&
+      (now - _lastStateEventTime < 0.1)) {
+    return; // Skip duplicate state
+  }
+  _lastStateEventTime = now;
+  _lastStateValue = [state copy];
+
   NSDictionary *body = @{
     @"state" : state,
     @"isConnected" : @(isConnected),
     @"isStreaming" : @(isStreaming),
     @"isEmulator" : @(isEmulator)
   };
-  NSLog(@"[FlirModule] onStateChanged - state: %@, connected: %d, streaming: %d", state, isConnected, isStreaming);
+  NSLog(
+      @"[FlirModule] onStateChanged - state: %@, connected: %d, streaming: %d",
+      state, isConnected, isStreaming);
   [self sendEventWithName:@"FlirStateChanged" body:body];
 }
 

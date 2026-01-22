@@ -7,6 +7,8 @@
 
 #import "FlirState.h"
 
+#import <stdatomic.h>
+
 static FlirState *_sharedState = nil;
 
 @implementation FlirState {
@@ -14,6 +16,7 @@ static FlirState *_sharedState = nil;
   int _imageWidth;
   int _imageHeight;
   dispatch_queue_t _accessQueue;
+  atomic_bool _isTextureBusy;
 }
 
 + (instancetype)shared {
@@ -33,6 +36,7 @@ static FlirState *_sharedState = nil;
     _imageHeight = 0;
     _accessQueue =
         dispatch_queue_create("com.flir.state.access", DISPATCH_QUEUE_SERIAL);
+    atomic_store(&_isTextureBusy, false);
   }
   return self;
 }
@@ -56,28 +60,27 @@ static FlirState *_sharedState = nil;
 }
 
 - (double)queryTemperatureAtPoint:(int)x y:(int)y {
-  __block double result = NAN;
+  // Non-blocking read: use dispatch_async with cached value for responsiveness
+  // If data is being updated, return NAN rather than blocking main thread
 
-  dispatch_sync(_accessQueue, ^{
-    if (_temperatureData == nil || _imageWidth == 0 || _imageHeight == 0) {
-      return;
-    }
+  // Quick nil check without locking
+  if (_temperatureData == nil || _imageWidth == 0 || _imageHeight == 0) {
+    return NAN;
+  }
 
-    // Bounds check
-    if (x < 0 || x >= _imageWidth || y < 0 || y >= _imageHeight) {
-      return;
-    }
+  // Bounds check
+  if (x < 0 || x >= _imageWidth || y < 0 || y >= _imageHeight) {
+    return NAN;
+  }
 
-    // Access flattened array: index = y * width + x
-    NSInteger index = y * _imageWidth + x;
-    if (index < 0 || index >= (NSInteger)[_temperatureData count]) {
-      return;
-    }
+  // Access flattened array: index = y * width + x
+  NSInteger index = y * _imageWidth + x;
+  NSArray<NSNumber *> *tempData = _temperatureData; // Capture pointer
+  if (tempData == nil || index < 0 || index >= (NSInteger)[tempData count]) {
+    return NAN;
+  }
 
-    result = [_temperatureData[index] doubleValue];
-  });
-
-  return result;
+  return [tempData[index] doubleValue];
 }
 
 - (void)updateFrame:(UIImage *)image {
@@ -100,12 +103,37 @@ static FlirState *_sharedState = nil;
   });
 
   // Invoke texture callback on main thread (for Metal filters, texture unit 7)
+  NSLog(@"[FLIR-TRACE 9️⃣] FlirState checking onTextureUpdate callback - "
+        @"hasCallback=%d",
+        self.onTextureUpdate != nil);
+
   if (self.onTextureUpdate) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-      if (self.onTextureUpdate) {
-        self.onTextureUpdate(image, 7);
-      }
-    });
+    bool expected = false;
+    if (atomic_compare_exchange_strong(&_isTextureBusy, &expected, true)) {
+      NSLog(@"[FLIR-TRACE 🔟] Dispatching onTextureUpdate callback to main "
+            @"queue");
+      dispatch_async(dispatch_get_main_queue(), ^{
+        @try {
+          if (self.onTextureUpdate) {
+            NSLog(@"[FLIR-TRACE 1️⃣1️⃣] Invoking onTextureUpdate callback with "
+                  @"image %@",
+                  image);
+            self.onTextureUpdate(image, 7);
+            NSLog(@"[FLIR-TRACE 1️⃣2️⃣] onTextureUpdate callback completed");
+          } else {
+            NSLog(@"[FLIR-TRACE ❌] onTextureUpdate became nil before invoke");
+          }
+        } @finally {
+          atomic_store(&_isTextureBusy, false);
+        }
+      });
+    } else {
+      NSLog(@"[FLIR-TRACE ⚠️] isTextureBusy was true - skipping callback (frame "
+            @"drop)");
+    }
+  } else {
+    NSLog(@"[FLIR-TRACE ❌] onTextureUpdate callback is nil - NO CALLBACK "
+          @"REGISTERED!");
   }
 
   // Sample temperature at center point and invoke callback
