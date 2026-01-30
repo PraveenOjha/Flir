@@ -1,19 +1,22 @@
 // FlirPublic.h
 // Public C/ObjC API for the Flir library
+//
+// NOTE: FlirDeviceInfo and FlirManager are defined in FlirManager.swift.
+// The Swift compiler generates Flir-Swift.h which exports these classes to Objective-C.
+// Do NOT define duplicate @interface declarations here to avoid "Duplicate interface" errors.
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
-@interface FlirDeviceInfo : NSObject
-@property (nonatomic, readonly) NSString *deviceId;
-@property (nonatomic, readonly) NSString *name;
-@property (nonatomic, readonly) NSString *communicationType;
-@property (nonatomic, readonly) BOOL isEmulator;
-- (NSDictionary *)toDictionary;
-@end
+// Forward declarations for Swift classes (defined in FlirManager.swift)
+// Use the Flir-Swift.h import in implementation files to access these.
+@class FlirDeviceInfo;
+@class FlirManager;
 
+/// Protocol for receiving FLIR events from FlirManager
+/// Implemented by FlirModule.m to bridge events to React Native
 @protocol FlirPublicDelegate <NSObject>
 - (void)onDevicesFound:(NSArray<FlirDeviceInfo *> *)devices;
 - (void)onDeviceConnected:(FlirDeviceInfo *)device;
@@ -25,26 +28,5 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)onStateChanged:(NSString *)state isConnected:(BOOL)isConnected isStreaming:(BOOL)isStreaming isEmulator:(BOOL)isEmulator;
 @end
 
-@interface FlirManager : NSObject
-+ (instancetype)shared NS_SWIFT_NAME(shared);
-
-@property (nonatomic, weak, nullable) id<FlirPublicDelegate> delegate;
-
-// Lifecycle
-- (void)startDiscovery;
-- (void)stopDiscovery;
-- (void)connectToDevice:(NSString *)deviceId;
-- (void)disconnect;
-- (void)stop;
-
-// Frame accessors
-- (nullable NSDictionary *)latestFrameBitmapBase64; // { width, height, bytesPerRow, dataBase64 }
-- (nullable NSString *)latestFrameBase64;
-
-// Utilities
-- (NSInteger)getBatteryLevel;
-- (BOOL)isBatteryCharging;
-
-@end
-
 NS_ASSUME_NONNULL_END
+
