@@ -46,9 +46,8 @@ dependencies {
     // FLIR SDK - Use the actual AAR files from libs folder
     // Using 'api' to expose SDK classes to consumers and Java source files
     // flatDir must be configured in settings.gradle or root build.gradle
-    api(files("libs/androidsdk-release.aar"))
-    api(files("libs/thermalsdk-release.aar"))
-    
+    compileOnly(files("libs/androidsdk-release.aar"))
+    compileOnly(files("libs/thermalsdk-release.aar"))
     // Minimal compile deps to satisfy source references
     implementation("androidx.annotation:annotation:1.5.0")
 
