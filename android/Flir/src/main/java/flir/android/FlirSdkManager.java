@@ -115,7 +115,9 @@ public class FlirSdkManager {
             DiscoveryFactory.getInstance().scan(
                     discoveryListener,
                     CommunicationInterface.EMULATOR,
-                    CommunicationInterface.USB);
+                    CommunicationInterface.USB,
+                    CommunicationInterface.NETWORK,
+                    CommunicationInterface.FLIR_ONE_WIRELESS);
         } catch (Exception e) {
             Log.e(TAG, "Scan failed", e);
             isScanning = false;
@@ -129,7 +131,9 @@ public class FlirSdkManager {
         try {
             DiscoveryFactory.getInstance().stop(
                     CommunicationInterface.EMULATOR,
-                    CommunicationInterface.USB);
+                    CommunicationInterface.USB,
+                    CommunicationInterface.NETWORK,
+                    CommunicationInterface.FLIR_ONE_WIRELESS);
         } catch (Exception e) {
             Log.e(TAG, "Stop scan failed", e);
         }

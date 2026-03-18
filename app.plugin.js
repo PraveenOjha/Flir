@@ -48,8 +48,7 @@ const EXTERNAL_ACCESSORY_PROTOCOLS = [
 
 // Bonjour services for FLIR network discovery
 const BONJOUR_SERVICES = [
-  '_flir._tcp',
-  '_http._tcp',
+  '_flir-ircam._tcp',
 ];
 
 // Default permission descriptions
@@ -182,7 +181,8 @@ const withFlirInfoPlist = (config, props = {}) => {
  */
 const withFlirEntitlements = (config) => {
   return withEntitlementsPlist(config, (config) => {
-    // Currently no special entitlements needed
+    // Required to read current WiFi SSID for direct connections
+    config.modResults['com.apple.developer.networking.wifi-info'] = true;
     return config;
   });
 };
@@ -252,6 +252,10 @@ const withFlirAndroidManifest = (config, props = {}) => {
     addPermission('android.permission.INTERNET');
     addPermission('android.permission.ACCESS_NETWORK_STATE');
     addPermission('android.permission.ACCESS_WIFI_STATE');
+    addPermission('android.permission.CHANGE_WIFI_STATE');
+    addPermission('android.permission.CHANGE_NETWORK_STATE');
+    addPermission('android.permission.CHANGE_WIFI_MULTICAST_STATE');
+    addPermission('android.permission.NEARBY_WIFI_DEVICES');
     addPermission('android.permission.BLUETOOTH');
     addPermission('android.permission.BLUETOOTH_ADMIN');
     addPermission('android.permission.BLUETOOTH_CONNECT');
