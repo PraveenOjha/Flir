@@ -28,7 +28,7 @@ import java.util.concurrent.Executors;
 
 /**
  * Simplified FLIR SDK Manager - matches sample app pattern
- * Simple: scan → connect → stream → disconnect
+ * Thread-safe: All lifecycle methods run on a single background executor to prevent native race conditions.
  */
 public class FlirSdkManager {
     private static final String TAG = "FlirSdkManager";
@@ -100,45 +100,49 @@ public class FlirSdkManager {
     // ==================== DISCOVERY ====================
 
     public void scan() {
-        if (!isInitialized) {
-            notifyError("SDK not initialized");
-            return;
-        }
-        if (isScanning)
-            return;
+        executor.execute(() -> {
+            if (!isInitialized) {
+                notifyError("SDK not initialized");
+                return;
+            }
+            if (isScanning)
+                return;
 
-        isScanning = true;
-        discoveredDevices.clear();
-        Log.d(TAG, "Starting discovery...");
+            isScanning = true;
+            discoveredDevices.clear();
+            Log.d(TAG, "Starting discovery...");
 
-        try {
-            DiscoveryFactory.getInstance().scan(
-                    discoveryListener,
-                    CommunicationInterface.EMULATOR,
-                    CommunicationInterface.USB,
-                    CommunicationInterface.NETWORK,
-                    CommunicationInterface.FLIR_ONE_WIRELESS);
-        } catch (Exception e) {
-            Log.e(TAG, "Scan failed", e);
-            isScanning = false;
-            notifyError("Scan failed: " + e.getMessage());
-        }
+            try {
+                DiscoveryFactory.getInstance().scan(
+                        discoveryListener,
+                        CommunicationInterface.EMULATOR,
+                        CommunicationInterface.USB,
+                        CommunicationInterface.NETWORK,
+                        CommunicationInterface.FLIR_ONE_WIRELESS);
+            } catch (Exception e) {
+                Log.e(TAG, "Scan failed", e);
+                isScanning = false;
+                notifyError("Scan failed: " + e.getMessage());
+            }
+        });
     }
 
     public void stopScan() {
-        if (!isScanning)
-            return;
-        try {
-            DiscoveryFactory.getInstance().stop(
-                    CommunicationInterface.EMULATOR,
-                    CommunicationInterface.USB,
-                    CommunicationInterface.NETWORK,
-                    CommunicationInterface.FLIR_ONE_WIRELESS);
-        } catch (Exception e) {
-            Log.e(TAG, "Stop scan failed", e);
-        }
-        isScanning = false;
-        Log.d(TAG, "Discovery stopped");
+        executor.execute(() -> {
+            if (!isScanning)
+                return;
+            try {
+                DiscoveryFactory.getInstance().stop(
+                        CommunicationInterface.EMULATOR,
+                        CommunicationInterface.USB,
+                        CommunicationInterface.NETWORK,
+                        CommunicationInterface.FLIR_ONE_WIRELESS);
+            } catch (Exception e) {
+                Log.e(TAG, "Stop scan failed", e);
+            }
+            isScanning = false;
+            Log.d(TAG, "Discovery stopped");
+        });
     }
 
     public List<Identity> getDiscoveredDevices() {
@@ -153,16 +157,21 @@ public class FlirSdkManager {
             return;
         }
 
-        // Disconnect if already connected
-        if (camera != null) {
-            disconnect();
-        }
-
-        Log.d(TAG, "Connecting to: " + identity.deviceId);
-
         // Run on background thread (matches sample app pattern)
         executor.execute(() -> {
             try {
+                // Disconnect if already connected
+                stopStreamInternal();
+                if (camera != null) {
+                    try {
+                        camera.disconnect();
+                    } catch (Exception e) {
+                        Log.e(TAG, "Disconnect error", e);
+                    }
+                    camera = null;
+                }
+
+                Log.d(TAG, "Connecting to: " + identity.deviceId);
                 camera = new Camera();
                 camera.connect(identity, connectionStatusListener, new ConnectParameters());
                 Log.d(TAG, "Connected to: " + identity.deviceId);
@@ -172,7 +181,7 @@ public class FlirSdkManager {
                 }
 
                 // Auto-start stream after connection (matches sample app)
-                startStream();
+                startStreamInternal();
 
             } catch (Exception e) {
                 Log.e(TAG, "Connection failed", e);
@@ -183,21 +192,23 @@ public class FlirSdkManager {
     }
 
     public void disconnect() {
-        stopStream();
+        executor.execute(() -> {
+            stopStreamInternal();
 
-        if (camera != null) {
-            try {
-                camera.disconnect();
-            } catch (Exception e) {
-                Log.e(TAG, "Disconnect error", e);
+            if (camera != null) {
+                try {
+                    camera.disconnect();
+                } catch (Exception e) {
+                    Log.e(TAG, "Disconnect error", e);
+                }
+                camera = null;
             }
-            camera = null;
-        }
 
-        if (listener != null) {
-            listener.onDisconnected();
-        }
-        Log.d(TAG, "Disconnected");
+            if (listener != null) {
+                listener.onDisconnected();
+            }
+            Log.d(TAG, "Disconnected");
+        });
     }
 
     public boolean isConnected() {
@@ -207,39 +218,49 @@ public class FlirSdkManager {
     // ==================== STREAMING ====================
 
     public void startStream() {
+        executor.execute(this::startStreamInternal);
+    }
+
+    private void startStreamInternal() {
         if (camera == null) {
             notifyError("Not connected");
             return;
         }
 
-        executor.execute(() -> {
-            try {
-                List<Stream> streams = camera.getStreams();
-                if (streams == null || streams.isEmpty()) {
-                    notifyError("No streams available");
-                    return;
-                }
+        try {
+            if (!camera.isConnected()) {
+                Log.e(TAG, "Camera not connected, cannot start stream");
+                notifyError("Camera not connected");
+                return;
+            }
 
-                // Find thermal stream or use first
-                Stream thermalStream = null;
-                for (Stream stream : streams) {
-                    if (stream.isThermal()) {
-                        thermalStream = stream;
-                        break;
-                    }
-                }
-                if (thermalStream == null) {
-                    thermalStream = streams.get(0);
-                }
+            List<Stream> streams = camera.getStreams();
+            if (streams == null || streams.isEmpty()) {
+                notifyError("No streams available");
+                return;
+            }
 
-                activeStream = thermalStream;
-                streamer = new ThermalStreamer(thermalStream);
+            // Find thermal stream or use first
+            Stream thermalStream = null;
+            for (Stream stream : streams) {
+                if (stream.isThermal()) {
+                    thermalStream = stream;
+                    break;
+                }
+            }
+            if (thermalStream == null) {
+                thermalStream = streams.get(0);
+            }
 
-                // Start stream with simple callback (matches sample app)
-                thermalStream.start(
-                        unused -> {
+            activeStream = thermalStream;
+            streamer = new ThermalStreamer(thermalStream);
+
+            // Start stream with simple callback (matches sample app)
+            thermalStream.start(
+                    unused -> {
+                        executor.execute(() -> {
                             try {
-                                if (streamer != null) {
+                                if (streamer != null && activeStream != null) {
                                     streamer.update();
                                     Bitmap bitmap = BitmapAndroid.createBitmap(streamer.getImage()).getBitMap();
                                     if (bitmap != null) {
@@ -252,22 +273,28 @@ public class FlirSdkManager {
                             } catch (Exception e) {
                                 Log.e(TAG, "Frame error", e);
                             }
-                        },
-                        error -> {
+                        });
+                    },
+                    error -> {
+                        executor.execute(() -> {
                             Log.e(TAG, "Stream error: " + error);
                             notifyError("Stream error: " + error);
                         });
+                    });
 
-                Log.d(TAG, "Streaming started");
+            Log.d(TAG, "Streaming started");
 
-            } catch (Exception e) {
-                Log.e(TAG, "Start stream failed", e);
-                notifyError("Stream failed: " + e.getMessage());
-            }
-        });
+        } catch (Exception e) {
+            Log.e(TAG, "Start stream failed", e);
+            notifyError("Stream failed: " + e.getMessage());
+        }
     }
 
     public void stopStream() {
+        executor.execute(this::stopStreamInternal);
+    }
+
+    private void stopStreamInternal() {
         if (activeStream != null) {
             try {
                 activeStream.stop();
@@ -288,27 +315,31 @@ public class FlirSdkManager {
     // ==================== TEMPERATURE ====================
 
     public double getTemperatureAt(int x, int y) {
-        if (streamer == null)
-            return Double.NaN;
-
+        // Run on the same thread to avoid concurrent access to 'streamer'
         final double[] result = { Double.NaN };
-        try {
-            streamer.withThermalImage(thermalImage -> {
-                try {
-                    int w = thermalImage.getWidth();
-                    int h = thermalImage.getHeight();
-                    int cx = Math.max(0, Math.min(w - 1, x));
-                    int cy = Math.max(0, Math.min(h - 1, y));
-                    ThermalValue value = thermalImage.getValueAt(new Point(cx, cy));
-                    if (value != null) {
-                        result[0] = value.asCelsius().value;
+        // This query remains synchronous for the caller but synchronized with the stream updates
+        synchronized (this) {
+            if (streamer == null)
+                return Double.NaN;
+
+            try {
+                streamer.withThermalImage(thermalImage -> {
+                    try {
+                        int w = thermalImage.getWidth();
+                        int h = thermalImage.getHeight();
+                        int cx = Math.max(0, Math.min(w - 1, x));
+                        int cy = Math.max(0, Math.min(h - 1, y));
+                        ThermalValue value = thermalImage.getValueAt(new Point(cx, cy));
+                        if (value != null) {
+                            result[0] = value.asCelsius().value;
+                        }
+                    } catch (Exception e) {
+                        Log.w(TAG, "Temp query error", e);
                     }
-                } catch (Exception e) {
-                    Log.w(TAG, "Temp query error", e);
-                }
-            });
-        } catch (Exception e) {
-            Log.w(TAG, "Temp query failed", e);
+                });
+            } catch (Exception e) {
+                Log.w(TAG, "Temp query failed", e);
+            }
         }
         return result[0];
     }
@@ -364,11 +395,13 @@ public class FlirSdkManager {
     };
 
     private final ConnectionStatusListener connectionStatusListener = errorCode -> {
-        Log.d(TAG, "Disconnected: " + (errorCode != null ? errorCode : "clean"));
-        camera = null;
-        if (listener != null) {
-            listener.onDisconnected();
-        }
+        executor.execute(() -> {
+            Log.d(TAG, "Disconnected callback: " + (errorCode != null ? errorCode : "clean"));
+            camera = null;
+            if (listener != null) {
+                listener.onDisconnected();
+            }
+        });
     };
 
     private void notifyError(String message) {
@@ -382,9 +415,11 @@ public class FlirSdkManager {
     public void destroy() {
         stopScan();
         disconnect();
-        discoveredDevices.clear();
-        listener = null;
-        instance = null;
-        Log.d(TAG, "Destroyed");
+        executor.execute(() -> {
+            discoveredDevices.clear();
+            listener = null;
+            instance = null;
+            Log.d(TAG, "Destroyed");
+        });
     }
 }

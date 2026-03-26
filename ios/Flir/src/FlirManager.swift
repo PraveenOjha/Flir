@@ -111,8 +111,8 @@ import ThermalSDK
             discovery?.delegate = self
         }
         
-        // Match sample app: discover lightning + wireless + emulator
-        discovery?.start([.lightning, .flirOneWireless, .emulator])
+        // Match sample app: discover lightning + wireless + emulator + network
+        discovery?.start([.lightning, .flirOneWireless, .emulator, .network])
         
         emitStateChange("discovering")
 #else
@@ -160,6 +160,18 @@ import ThermalSDK
                 guard let cam = self.camera else {
                     self.notifyError("Failed to create camera")
                     return
+                }
+                
+                // Authenticate if generic network camera
+                if identity.cameraType() == .generic {
+                    var status = FLIRAuthenticationStatus.pending
+                    let certName = (Bundle.main.bundleIdentifier ?? "ThermalCamera") + "-cert"
+                    while status == .pending {
+                        status = cam.authenticate(identity, trustedConnectionName: certName)
+                        if status == .pending {
+                            Thread.sleep(forTimeInterval: 0.2)
+                        }
+                    }
                 }
                 
                 // Pair and connect (matches sample app pattern)
