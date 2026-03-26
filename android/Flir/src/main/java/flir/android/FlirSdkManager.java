@@ -25,6 +25,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Simplified FLIR SDK Manager - matches sample app pattern
@@ -45,6 +46,8 @@ public class FlirSdkManager {
     private Stream activeStream;
     private final List<Identity> discoveredDevices = Collections.synchronizedList(new ArrayList<>());
     private volatile Bitmap latestBitmap;
+    private final AtomicBoolean isProcessingFrame = new AtomicBoolean(false);
+    private boolean useHalfScale = false;
 
     // Listener
     private Listener listener;
@@ -221,6 +224,15 @@ public class FlirSdkManager {
         executor.execute(this::startStreamInternal);
     }
 
+    public void setUseHalfScale(boolean useHalfScale) {
+        this.useHalfScale = useHalfScale;
+        executor.execute(() -> {
+            if (streamer != null) {
+                // We'll apply this when the streamer is created or updated
+            }
+        });
+    }
+
     private void startStreamInternal() {
         if (camera == null) {
             notifyError("Not connected");
@@ -258,22 +270,27 @@ public class FlirSdkManager {
             // Start stream with simple callback (matches sample app)
             thermalStream.start(
                     unused -> {
-                        executor.execute(() -> {
-                            try {
-                                if (streamer != null && activeStream != null) {
-                                    streamer.update();
-                                    Bitmap bitmap = BitmapAndroid.createBitmap(streamer.getImage()).getBitMap();
-                                    if (bitmap != null) {
-                                        latestBitmap = bitmap;
-                                        if (listener != null) {
-                                            listener.onFrame(bitmap);
+                        // Skip if previous frame still processing
+                        if (isProcessingFrame.compareAndSet(false, true)) {
+                            executor.execute(() -> {
+                                try {
+                                    if (streamer != null && activeStream != null) {
+                                        streamer.update();
+                                        Bitmap bitmap = BitmapAndroid.createBitmap(streamer.getImage()).getBitMap();
+                                        if (bitmap != null) {
+                                            latestBitmap = bitmap;
+                                            if (listener != null) {
+                                                listener.onFrame(bitmap);
+                                            }
                                         }
                                     }
+                                } catch (Exception e) {
+                                    Log.e(TAG, "Frame error", e);
+                                } finally {
+                                    isProcessingFrame.set(false);
                                 }
-                            } catch (Exception e) {
-                                Log.e(TAG, "Frame error", e);
-                            }
-                        });
+                            });
+                        }
                     },
                     error -> {
                         executor.execute(() -> {

@@ -59,6 +59,7 @@ import ThermalSDK
     
     private var _isConnected = false
     private var _isStreaming = false
+    private var _isProcessingFrame = false
     private var connectedDeviceId: String?
     private var connectedDeviceName: String?
     
@@ -530,7 +531,15 @@ extension FlirManager: FLIRStreamDelegate {
         
         // Process frame on dedicated render queue (matches sample app pattern)
         // This prevents blocking the SDK callback thread and main thread
+        // Guard to skip frame if already processing (prevents backpressure/latency)
+        guard !_isProcessingFrame else {
+            NSLog("[FLIR-TRACE ⏩] Skipping frame (already processing)")
+            return
+        }
+        
+        _isProcessingFrame = true
         renderQueue.async { [weak self] in
+            defer { self?._isProcessingFrame = false }
             guard let self = self, let streamer = self.streamer else {
                 NSLog("[FLIR-TRACE ❌] No self or streamer in renderQueue")
                 return

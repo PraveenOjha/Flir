@@ -255,9 +255,9 @@ object FlirManager {
                 return
             }
 
-            // THROTTLE: Limit to ~15 FPS to prevent UI thread flooding
+            // THROTTLE: Limit to ~30 FPS for smoother streaming
             val now = System.currentTimeMillis()
-            if (now - lastEmitMs.get() < 66) { // 66ms ~= 15 FPS
+            if (now - lastEmitMs.get() < 33) { // 33ms ~= 30 FPS
                 return
             }
             lastEmitMs.set(now)
