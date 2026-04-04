@@ -67,6 +67,16 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             promise.reject("ERR_FLIR_SAMPLE", e)
         }
     }
+
+    @ReactMethod
+    fun getTemperatureAtNormalized(nx: Double, ny: Double, promise: Promise) {
+        try {
+            val temp = FlirManager.getTemperatureAtNormalized(nx, ny)
+            if (temp != null) promise.resolve(temp) else promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("ERR_FLIR_TEMP_NORM", e)
+        }
+    }
     
     @ReactMethod
     fun isEmulator(promise: Promise) {

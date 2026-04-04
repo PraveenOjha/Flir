@@ -180,8 +180,10 @@ object FlirManager {
     }
     
     fun getTemperatureAtNormalized(nx: Double, ny: Double): Double? {
-        // Not implemented in simplified version
-        return null 
+        val bitmap = latestBitmap ?: return null
+        val px = (nx * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
+        val py = (ny * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
+        return getTemperatureAt(px, py)
     }
     
     fun getTemperatureAtPoint(x: Int, y: Int): Double? = getTemperatureAt(x, y)
