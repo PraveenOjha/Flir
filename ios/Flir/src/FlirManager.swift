@@ -152,38 +152,86 @@ import ThermalSDK
         DispatchQueue.global().async { [weak self] in
             guard let self = self else { return }
             
-            do {
-                if self.camera == nil {
-                    self.camera = FLIRCamera()
-                    self.camera?.delegate = self
+            // Create camera instance
+            if self.camera == nil {
+                self.camera = FLIRCamera()
+                self.camera?.delegate = self
+            }
+            
+            guard let cam = self.camera else {
+                self.notifyError("Failed to create camera")
+                return
+            }
+            
+            let iface = identity.communicationInterface()
+            let camType = identity.cameraType()
+            NSLog("[FlirManager] Camera type: \(camType.rawValue), interface: \(iface.rawValue)")
+            
+            // ── AUTHENTICATE for network cameras ──
+            // Official FLIR CameraConnector sample checks .generic camera type,
+            // but FLIR One Edge Pro over network may report a different type.
+            // Check BOTH: camera type == .generic OR interface contains .network
+            let needsAuth = (camType == .generic) || iface.contains(.network)
+            
+            if needsAuth {
+                NSLog("[FlirManager] Network camera detected — authenticating...")
+                
+                // Use UUID-based persistent certificate name (matches FLIR sample).
+                // The camera has a bug where re-auth with a different name conflicts.
+                let certName = self.getPersistentCertificateName()
+                NSLog("[FlirManager] Using certificate name: \(certName)")
+                
+                var status = FLIRAuthenticationStatus.pending
+                var attempts = 0
+                let maxAttempts = 30 // ~30 seconds timeout
+                
+                while status == .pending && attempts < maxAttempts {
+                    status = cam.authenticate(identity, trustedConnectionName: certName)
+                    NSLog("[FlirManager] Auth attempt \(attempts + 1)/\(maxAttempts) status: \(status.rawValue)")
+                    
+                    if status == .pending {
+                        // Camera waiting for user to press "Trust" on its screen
+                        Thread.sleep(forTimeInterval: 1.0)
+                    }
+                    attempts += 1
                 }
                 
-                guard let cam = self.camera else {
-                    self.notifyError("Failed to create camera")
+                if status != .approved {
+                    NSLog("[FlirManager] Authentication failed/timed out: \(status.rawValue)")
+                    self.camera = nil
+                    DispatchQueue.main.async {
+                        self.emitStateChange("connection_failed")
+                        self.delegate?.onError("Camera authentication failed. Check the camera screen for a trust/approve prompt.")
+                    }
                     return
                 }
-                
-                // Authenticate if generic network camera
-                if identity.cameraType() == .generic {
-                    var status = FLIRAuthenticationStatus.pending
-                    let certName = (Bundle.main.bundleIdentifier ?? "ThermalCamera") + "-cert"
-                    while status == .pending {
-                        status = cam.authenticate(identity, trustedConnectionName: certName)
-                        if status == .pending {
-                            Thread.sleep(forTimeInterval: 0.2)
-                        }
-                    }
-                }
-                
-                // Pair and connect (matches sample app pattern)
+                NSLog("[FlirManager] Authentication approved ✅")
+            }
+            
+            // ── PAIR ──
+            do {
                 try cam.pair(identity, code: 0)
+                NSLog("[FlirManager] Pair succeeded")
+            } catch {
+                NSLog("[FlirManager] Pair failed: \(error)")
+                self._isConnected = false
+                self.camera = nil
+                DispatchQueue.main.async {
+                    self.emitStateChange("connection_failed")
+                    self.delegate?.onError("Pairing failed: \(error.localizedDescription)")
+                }
+                return
+            }
+            
+            // ── CONNECT ──
+            do {
                 try cam.connect()
                 
                 self._isConnected = true
                 self.connectedDeviceId = identity.deviceId()
                 self.connectedDeviceName = identity.deviceId()
                 
-                NSLog("[FlirManager] Connected to: \(identity.deviceId())")
+                NSLog("[FlirManager] Connected to: \(identity.deviceId()) ✅")
                 
                 // Notify on main thread
                 let deviceInfo = FlirDeviceInfo(
@@ -202,7 +250,7 @@ import ThermalSDK
                 self.startStreamInternal()
                 
             } catch {
-                NSLog("[FlirManager] Connection failed: \(error)")
+                NSLog("[FlirManager] Connect failed: \(error)")
                 self._isConnected = false
                 self.camera = nil
                 DispatchQueue.main.async {
@@ -427,6 +475,22 @@ import ThermalSDK
         DispatchQueue.main.async { [weak self] in
             self?.delegate?.onError(message)
         }
+    }
+    
+    /// Persistent UUID-based certificate name for camera authentication.
+    /// Matches the pattern from FLIR's official CameraConnector sample.
+    /// The camera has a bug where re-auth with a different name can conflict,
+    /// so we generate a UUID once and persist it in UserDefaults.
+    private func getPersistentCertificateName() -> String {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return "flir-cert-fallback" }
+        let key = "\(bundleID)-flir-cert-name"
+        let defaults = UserDefaults.standard
+        if let existing = defaults.string(forKey: key) {
+            return existing
+        }
+        let newName = UUID().uuidString
+        defaults.set(newName, forKey: key)
+        return newName
     }
     
 #if FLIR_ENABLED

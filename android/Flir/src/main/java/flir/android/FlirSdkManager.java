@@ -1,6 +1,7 @@
 package flir.android;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.util.Log;
 
@@ -9,6 +10,7 @@ import com.flir.thermalsdk.androidsdk.ThermalSdkAndroid;
 import com.flir.thermalsdk.androidsdk.image.BitmapAndroid;
 import com.flir.thermalsdk.image.Point;
 import com.flir.thermalsdk.image.ThermalValue;
+import com.flir.thermalsdk.live.AuthenticationResponse;
 import com.flir.thermalsdk.live.Camera;
 import com.flir.thermalsdk.live.CommunicationInterface;
 import com.flir.thermalsdk.live.ConnectParameters;
@@ -176,6 +178,57 @@ public class FlirSdkManager {
 
                 Log.d(TAG, "Connecting to: " + identity.deviceId);
                 camera = new Camera();
+
+                // ── Authenticate for NETWORK cameras (required by FLIR SDK) ──
+                // Matches the official NetworkCamera sample app pattern.
+                // The FLIR One Edge Pro is a network camera and will reject
+                // connections without prior authentication + trust approval.
+                if (identity.communicationInterface == CommunicationInterface.NETWORK) {
+                    Log.d(TAG, "Network camera detected — authenticating...");
+
+                    // Use a persistent application name (workaround for camera bug
+                    // where re-auth with a different name conflicts). Same pattern
+                    // as CameraAuthName in the NetworkCamera sample.
+                    SharedPreferences prefs = context.getSharedPreferences(
+                            "flir_auth", Context.MODE_PRIVATE);
+                    String authName = prefs.getString("auth_name", null);
+                    if (authName == null) {
+                        authName = context.getPackageName() + "-" +
+                                (System.currentTimeMillis() % 10000);
+                        prefs.edit().putString("auth_name", authName).apply();
+                    }
+
+                    AuthenticationResponse response;
+                    int attempts = 0;
+                    final int MAX_AUTH_ATTEMPTS = 30; // 30 seconds max wait
+                    do {
+                        response = camera.authenticate(identity, authName,
+                                41 * 1000); // 41-second timeout per attempt
+                        Log.d(TAG, "Auth attempt " + (attempts + 1) +
+                                " status: " + response.authenticationStatus);
+
+                        if (response.authenticationStatus ==
+                                AuthenticationResponse.AuthenticationStatus.PENDING) {
+                            // Camera is waiting for user to press "Trust" on its screen
+                            Thread.sleep(1000);
+                        }
+                        attempts++;
+                    } while (response.authenticationStatus ==
+                            AuthenticationResponse.AuthenticationStatus.PENDING
+                            && attempts < MAX_AUTH_ATTEMPTS);
+
+                    if (response.authenticationStatus !=
+                            AuthenticationResponse.AuthenticationStatus.APPROVED) {
+                        Log.e(TAG, "Authentication rejected/timed out: " +
+                                response.authenticationStatus);
+                        camera = null;
+                        notifyError("Camera authentication failed. " +
+                                "Check the camera screen for a trust prompt.");
+                        return;
+                    }
+                    Log.d(TAG, "Authentication approved");
+                }
+
                 camera.connect(identity, connectionStatusListener, new ConnectParameters());
                 Log.d(TAG, "Connected to: " + identity.deviceId);
 
