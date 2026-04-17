@@ -94,14 +94,15 @@ Pod::Spec.new do |s|
       # Vendored frameworks - the actual SDK
       s.vendored_frameworks = [
         'ios/Flir/Frameworks/ThermalSDK.xcframework',
-        'ios/Flir/Frameworks/libavcodec.61.dylib.xcframework',
-        'ios/Flir/Frameworks/libavdevice.61.dylib.xcframework', 
-        'ios/Flir/Frameworks/libavfilter.10.dylib.xcframework',
-        'ios/Flir/Frameworks/libavformat.61.dylib.xcframework',
-        'ios/Flir/Frameworks/libavutil.59.dylib.xcframework',
+        'ios/Flir/Frameworks/MeterLink.xcframework',
+        'ios/Flir/Frameworks/libavcodec.62.dylib.xcframework',
+        'ios/Flir/Frameworks/libavdevice.62.dylib.xcframework', 
+        'ios/Flir/Frameworks/libavfilter.11.dylib.xcframework',
+        'ios/Flir/Frameworks/libavformat.62.dylib.xcframework',
+        'ios/Flir/Frameworks/libavutil.60.dylib.xcframework',
         'ios/Flir/Frameworks/liblive666.dylib.xcframework',
-        'ios/Flir/Frameworks/libswresample.5.dylib.xcframework',
-        'ios/Flir/Frameworks/libswscale.8.dylib.xcframework'
+        'ios/Flir/Frameworks/libswresample.6.dylib.xcframework',
+        'ios/Flir/Frameworks/libswscale.9.dylib.xcframework'
       ].select { |f| File.exist?(File.join(__dir__, f)) }
       
       s.pod_target_xcconfig = {

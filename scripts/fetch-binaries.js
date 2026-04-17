@@ -192,7 +192,7 @@ async function run() {
           args[key] = value;
         } else {
           // if following arg exists and doesn't start with '-', use it as the value
-          const next = argv[i+1];
+          const next = argv[i + 1];
           if (next && !next.startsWith('-')) {
             args[cur.replace(/^--/, '')] = next;
             i++;
@@ -202,7 +202,7 @@ async function run() {
         }
       } else if (cur.startsWith('-')) {
         const key = cur.replace(/^-+/, '');
-        const next = argv[i+1];
+        const next = argv[i + 1];
         if (next && !next.startsWith('-')) {
           args[key] = next;
           i++;
@@ -254,7 +254,7 @@ async function run() {
     // Clean out TMP_DIR (remove all contents) to avoid conflicts for iOS
     fs.readdirSync(TMP_DIR).forEach(f => {
       const fp = path.join(TMP_DIR, f);
-      try { fs.rmSync(fp, { recursive: true, force: true }); } catch (e) {}
+      try { fs.rmSync(fp, { recursive: true, force: true }); } catch (e) { }
     });
 
     if (skipIfPresent && platformArg !== 'android' && hasIosFrameworks(DEST_IOS)) {
@@ -270,7 +270,7 @@ async function run() {
     }
 
     // Cleanup tmp
-    try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch (e) {}
+    try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch (e) { }
 
     console.log('FLIR SDK binaries fetched and installed into the package folders.');
   } catch (err) {
@@ -278,7 +278,7 @@ async function run() {
     process.exit(1);
   } finally {
     // Always attempt to remove temporary folder to avoid leaving cruft
-    try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch (e) {}
+    try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch (e) { }
   }
 }
 
