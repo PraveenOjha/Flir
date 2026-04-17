@@ -6,8 +6,8 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-let IOS_URL = 'https://github.com/PraveenOjha/flir-sdk-binaries/releases/download/v1.0.1/ios.zip';
-let ANDROID_URL = 'https://github.com/PraveenOjha/flir-sdk-binaries/releases/download/v1.0.1/android.zip';
+let IOS_URL = 'https://github.com/PraveenOjha/flir-sdk-binaries/releases/download/v1.0.2/ios.zip';
+let ANDROID_URL = 'https://github.com/PraveenOjha/flir-sdk-binaries/releases/download/v1.0.2/android.zip';
 // Manifest override
 try {
   const manifest = require(path.join(__dirname, '..', 'sdk-manifest.json'));

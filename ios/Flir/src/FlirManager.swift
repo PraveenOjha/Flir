@@ -170,8 +170,8 @@ import ThermalSDK
             // ── AUTHENTICATE for network cameras ──
             // Official FLIR CameraConnector sample checks .generic camera type,
             // but FLIR One Edge Pro over network may report a different type.
-            // Check BOTH: camera type == .generic OR interface contains .network
-            let needsAuth = (camType == .generic) || iface.contains(.network)
+            // Check BOTH: camera type == .generic OR interface contains .network/.flirOneWireless
+            let needsAuth = (camType == .generic) || iface.contains(.network) || iface.contains(.flirOneWireless)
             
             if needsAuth {
                 NSLog("[FlirManager] Network camera detected — authenticating...")

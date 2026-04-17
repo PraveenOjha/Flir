@@ -133,20 +133,25 @@ public class FlirSdkManager {
     }
 
     public void stopScan() {
+        if (!isScanning) return;
+        
+        // Use a temporary flag to prevent concurrent stop calls
+        isScanning = false;
+        
         executor.execute(() -> {
-            if (!isScanning)
-                return;
             try {
+                Log.d(TAG, "Stopping discovery...");
                 DiscoveryFactory.getInstance().stop(
                         CommunicationInterface.EMULATOR,
                         CommunicationInterface.USB,
                         CommunicationInterface.NETWORK,
                         CommunicationInterface.FLIR_ONE_WIRELESS);
+                Log.d(TAG, "Discovery stopped successfully");
             } catch (Exception e) {
-                Log.e(TAG, "Stop scan failed", e);
+                // This is where the 'Receiver not registered' usually happens in SDK internals.
+                // We catch it silently as it means the SDK already cleaned up or is in a weird state.
+                Log.w(TAG, "Stop scan warning (internal SDK): " + e.getMessage());
             }
-            isScanning = false;
-            Log.d(TAG, "Discovery stopped");
         });
     }
 
@@ -179,12 +184,13 @@ public class FlirSdkManager {
                 Log.d(TAG, "Connecting to: " + identity.deviceId);
                 camera = new Camera();
 
-                // ── Authenticate for NETWORK cameras (required by FLIR SDK) ──
+                // ── Authenticate for NETWORK/WIRELESS cameras (required by FLIR SDK) ──
                 // Matches the official NetworkCamera sample app pattern.
-                // The FLIR One Edge Pro is a network camera and will reject
+                // The FLIR One Edge Pro is a network/wireless camera and will reject
                 // connections without prior authentication + trust approval.
-                if (identity.communicationInterface == CommunicationInterface.NETWORK) {
-                    Log.d(TAG, "Network camera detected — authenticating...");
+                if (identity.communicationInterface == CommunicationInterface.NETWORK || 
+                    identity.communicationInterface == CommunicationInterface.FLIR_ONE_WIRELESS) {
+                    Log.d(TAG, "Network/Wireless camera detected — authenticating...");
 
                     // Use a persistent application name (workaround for camera bug
                     // where re-auth with a different name conflicts). Same pattern
@@ -323,26 +329,28 @@ public class FlirSdkManager {
             // Start stream with simple callback (matches sample app)
             thermalStream.start(
                     unused -> {
-                        // Skip if previous frame still processing
+                        // CRITICAL: Frame processing must happen in a controlled way.
+                        // For Android, we perform streamer.update() on the callback thread 
+                        // to ensure the native frame reference remains valid.
                         if (isProcessingFrame.compareAndSet(false, true)) {
-                            executor.execute(() -> {
-                                try {
-                                    if (streamer != null && activeStream != null) {
-                                        streamer.update();
-                                        Bitmap bitmap = BitmapAndroid.createBitmap(streamer.getImage()).getBitMap();
-                                        if (bitmap != null) {
-                                            latestBitmap = bitmap;
-                                            if (listener != null) {
-                                                listener.onFrame(bitmap);
-                                            }
+                            try {
+                                if (streamer != null && activeStream != null) {
+                                    streamer.update();
+                                    
+                                    // createBitmap is safe to do here or in executor
+                                    Bitmap bitmap = BitmapAndroid.createBitmap(streamer.getImage()).getBitMap();
+                                    if (bitmap != null) {
+                                        latestBitmap = bitmap;
+                                        if (listener != null) {
+                                            listener.onFrame(bitmap);
                                         }
                                     }
-                                } catch (Exception e) {
-                                    Log.e(TAG, "Frame error", e);
-                                } finally {
-                                    isProcessingFrame.set(false);
                                 }
-                            });
+                            } catch (Exception e) {
+                                Log.e(TAG, "Frame processing error", e);
+                            } finally {
+                                isProcessingFrame.set(false);
+                            }
                         }
                     },
                     error -> {

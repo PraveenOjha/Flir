@@ -178,11 +178,19 @@ const withFlirInfoPlist = (config, props = {}) => {
 
 /**
  * Adds FLIR-specific entitlements for iOS
+ * Required for FLIR One Edge Pro and network discovery
  */
 const withFlirEntitlements = (config) => {
   return withEntitlementsPlist(config, (config) => {
-    // Required to read current WiFi SSID for direct connections
+    // 1. Access Wi-Fi Information
     config.modResults['com.apple.developer.networking.wifi-info'] = true;
+    
+    // 2. Hotspot Configuration (Required for FLIR Edge)
+    config.modResults['com.apple.developer.networking.HotspotConfiguration'] = true;
+    
+    // 3. Wireless Accessory Configuration (Required for FLIR Edge)
+    config.modResults['com.apple.external-accessory.wireless-configuration'] = true;
+    
     return config;
   });
 };
@@ -247,6 +255,19 @@ const withFlirAndroidManifest = (config, props = {}) => {
 
     // WiFi feature for network cameras
     addFeature('android.hardware.wifi', false);
+    
+    // OpenGL ES 3.0 requirement (mandatory for Atlas SDK rendering)
+    const hasOpenGL = mainApplication['uses-feature'].some(
+      (f) => f.$?.['android:glEsVersion'] === '0x00030000'
+    );
+    if (!hasOpenGL) {
+      mainApplication['uses-feature'].push({
+        $: {
+          'android:glEsVersion': '0x00030000',
+          'android:required': 'true',
+        },
+      });
+    }
 
     // Network permissions (always added on Android)
     addPermission('android.permission.INTERNET');
@@ -255,12 +276,48 @@ const withFlirAndroidManifest = (config, props = {}) => {
     addPermission('android.permission.CHANGE_WIFI_STATE');
     addPermission('android.permission.CHANGE_NETWORK_STATE');
     addPermission('android.permission.CHANGE_WIFI_MULTICAST_STATE');
+    
+    // Required for Wi-Fi discovery on Android 13+ (API 33)
     addPermission('android.permission.NEARBY_WIFI_DEVICES');
+    
     addPermission('android.permission.BLUETOOTH');
     addPermission('android.permission.BLUETOOTH_ADMIN');
     addPermission('android.permission.BLUETOOTH_CONNECT');
     addPermission('android.permission.BLUETOOTH_SCAN');
     addPermission('android.permission.ACCESS_FINE_LOCATION'); // Required for BLE scanning
+
+    // =========================================================================
+    // USB AUTO-LAUNCH CONFIGURATION
+    // Allows the app to open automatically when a FLIR USB device is attached.
+    // =========================================================================
+    const activity = mainApplication.application[0].activity[0];
+    
+    // 1. Add intent filter for USB_DEVICE_ATTACHED
+    if (!activity['intent-filter']) activity['intent-filter'] = [];
+    const hasUsbIntent = activity['intent-filter'].some(filter => 
+      filter.action?.some(action => action.$['android:name'] === 'android.hardware.usb.action.USB_DEVICE_ATTACHED')
+    );
+    
+    if (!hasUsbIntent) {
+      activity['intent-filter'].push({
+        action: [{ $: { 'android:name': 'android.hardware.usb.action.USB_DEVICE_ATTACHED' } }]
+      });
+    }
+    
+    // 2. Add meta-data pointing to the flir_usb_device_filter.xml
+    if (!activity['meta-data']) activity['meta-data'] = [];
+    const hasUsbMetadata = activity['meta-data'].some(meta => 
+      meta.$['android:name'] === 'android.hardware.usb.action.USB_DEVICE_ATTACHED'
+    );
+    
+    if (!hasUsbMetadata) {
+      activity['meta-data'].push({
+        $: {
+          'android:name': 'android.hardware.usb.action.USB_DEVICE_ATTACHED',
+          'android:resource': '@xml/flir_usb_device_filter'
+        }
+      });
+    }
 
     return config;
   });
@@ -284,18 +341,67 @@ const withFlirManifest = (config) => {
 };
 
 /**
- * Copies sdk-manifest.json to Android assets
+ * Copies sdk-manifest.json to Android assets AND creates the USB filter XML
  */
 const withFlirAndroidAssets = (config) => {
   return withDangerousMod(config, [
     'android',
     async (config) => {
-      const src = path.join(__dirname, 'sdk-manifest.json');
-      const dst = path.join(config.modRequest.platformProjectRoot, 'app/src/main/assets/sdk-manifest.json');
-      if (fs.existsSync(src)) {
-        fs.mkdirSync(path.dirname(dst), { recursive: true });
-        fs.copyFileSync(src, dst);
+      const projectRoot = config.modRequest.projectRoot;
+      const platformRoot = config.modRequest.platformProjectRoot;
+      
+      // 1. Copy sdk-manifest.json
+      const manifestSrc = path.join(__dirname, 'sdk-manifest.json');
+      const manifestDst = path.join(platformRoot, 'app/src/main/assets/sdk-manifest.json');
+      if (fs.existsSync(manifestSrc)) {
+        fs.mkdirSync(path.dirname(manifestDst), { recursive: true });
+        fs.copyFileSync(manifestSrc, manifestDst);
       }
+      
+      // 2. Create flir_usb_device_filter.xml (Required for auto-launch)
+      const usbFilterXml = `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- FLIR Vendor ID (2507) -->
+    <usb-device vendor-id="2507" />
+</resources>`;
+      
+      const xmlDst = path.join(platformRoot, 'app/src/main/res/xml/flir_usb_device_filter.xml');
+      fs.mkdirSync(path.dirname(xmlDst), { recursive: true });
+      fs.writeFileSync(xmlDst, usbFilterXml);
+      
+      return config;
+    },
+  ]);
+};
+
+/**
+ * Patch Xcode project settings (Bitcode, Linker Flags)
+ */
+const withFlirXcodeSettings = (config) => {
+  return withDangerousMod(config, [
+    'ios',
+    async (config) => {
+      const { modRequest } = config;
+      const xcodeProjectPath = path.join(modRequest.platformProjectRoot, 'ThermalCameraFx.xcodeproj/project.pbxproj');
+      
+      if (!fs.existsSync(xcodeProjectPath)) return config;
+      
+      let pbxproj = fs.readFileSync(xcodeProjectPath, 'utf8');
+      
+      // 1. Disable Bitcode (Required for FLIR SDK)
+      // Matches: ENABLE_BITCODE = YES; -> ENABLE_BITCODE = NO;
+      pbxproj = pbxproj.replace(/ENABLE_BITCODE = YES/g, 'ENABLE_BITCODE = NO');
+      
+      // 2. Add -ObjC to OTHER_LDFLAGS if not present
+      // This is a bit tricky with regex, so we look for the OTHER_LDFLAGS line
+      if (!pbxproj.includes('"-ObjC"') && !pbxproj.includes('-ObjC')) {
+          pbxproj = pbxproj.replace(
+              /OTHER_LDFLAGS = \(\n/g,
+              'OTHER_LDFLAGS = (\n\t\t\t\t"-ObjC",\n'
+          );
+      }
+      
+      fs.writeFileSync(xcodeProjectPath, pbxproj, 'utf8');
       return config;
     },
   ]);
@@ -368,6 +474,7 @@ const withFlirThermalSDK = (config, props = {}) => {
   // Apply iOS modifications
   config = withFlirInfoPlist(config, props);
   config = withFlirEntitlements(config);
+  config = withFlirXcodeSettings(config);
   config = withFlirManifest(config);
 
   // Apply Android modifications

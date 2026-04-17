@@ -2,9 +2,9 @@
   "version": "2.0.0",
   "sdkVersion": "5.0.0",
   "ios": {
-    "downloadUrl": "https://github.com/PraveenOjha/flir-sdk-binaries/releases/download/v1.0.1/ios.zip",
+    "downloadUrl": "https://github.com/PraveenOjha/flir-sdk-binaries/releases/download/v1.0.2/ios.zip",
     "directDownload": {
-      "downloadUrl": "https://github.com/PraveenOjha/flir-sdk-binaries/releases/download/v1.0.1/ios.zip",
+      "downloadUrl": "https://github.com/PraveenOjha/flir-sdk-binaries/releases/download/v1.0.2/ios.zip",
       "sha256": "",
       "sizeBytes": 0
     },
@@ -14,14 +14,14 @@
     "xcframeworks": [
       "ThermalSDK.xcframework",
       "MeterLink.xcframework",
-      "libavcodec.61.dylib.xcframework",
-      "libavdevice.61.dylib.xcframework",
-      "libavfilter.10.dylib.xcframework",
-      "libavformat.61.dylib.xcframework",
-      "libavutil.59.dylib.xcframework",
+      "libavcodec.62.dylib.xcframework",
+      "libavdevice.62.dylib.xcframework",
+      "libavfilter.11.dylib.xcframework",
+      "libavformat.62.dylib.xcframework",
+      "libavutil.60.dylib.xcframework",
       "liblive666.dylib.xcframework",
-      "libswresample.5.dylib.xcframework",
-      "libswscale.8.dylib.xcframework"
+      "libswresample.6.dylib.xcframework",
+      "libswscale.9.dylib.xcframework"
     ],
     "minDeploymentTarget": "13.0",
     "supportedArchitectures": [
@@ -32,7 +32,7 @@
   "android": {
    
     "directDownload": {
-      "downloadUrl": "https://github.com/PraveenOjha/flir-sdk-binaries/releases/download/v1.0.1/android.zip",
+      "downloadUrl": "https://github.com/PraveenOjha/flir-sdk-binaries/releases/download/v1.0.2/android.zip",
       "sha256": "",
       "sizeBytes": 0
     }
