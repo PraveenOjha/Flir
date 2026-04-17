@@ -364,14 +364,22 @@ import ThermalSDK
     
     @objc public func getTemperatureAt(x: Int, y: Int) -> Double {
 #if FLIR_ENABLED
-        guard let streamer = streamer else { return Double.nan }
+        guard let streamer = streamer, _isStreaming else { return Double.nan }
         
         var result = Double.nan
         streamer.withThermalImage { thermalImage in
-            let w = thermalImage.getWidth()
-            let h = thermalImage.getHeight()
-            let cx = max(0, min(Int(w) - 1, x))
-            let cy = max(0, min(Int(h) - 1, y))
+            let w = Double(thermalImage.getWidth())
+            let h = Double(thermalImage.getHeight())
+            
+            // Map incoming integer coordinates (from latestImage) to normalized, then to sensor
+            // This assumes x,y are in latestImage coordinate space.
+            guard let img = self.latestImage, img.size.width > 0, img.size.height > 0 else { return }
+            
+            let nx = Double(x) / Double(img.size.width)
+            let ny = Double(y) / Double(img.size.height)
+            
+            let cx = max(0, min(Int(w) - 1, Int(nx * w)))
+            let cy = max(0, min(Int(h) - 1, Int(ny * h)))
             
             if let measurements = thermalImage.measurements,
                let spot = try? measurements.addSpot(CGPoint(x: cx, y: cy)) {
@@ -393,10 +401,28 @@ import ThermalSDK
 
     
     @objc public func getTemperatureAtNormalized(_ nx: Double, y: Double) -> Double {
-        guard let img = latestImage else { return Double.nan }
-        let px = Int(nx * Double(img.size.width))
-        let py = Int(y * Double(img.size.height))
-        return getTemperatureAt(x: px, y: py)
+#if FLIR_ENABLED
+        guard let streamer = streamer, _isStreaming else { return Double.nan }
+        
+        var result = Double.nan
+        streamer.withThermalImage { thermalImage in
+            let w = Double(thermalImage.getWidth())
+            let h = Double(thermalImage.getHeight())
+            
+            // Map normalized (0.0 - 1.0) to actual sensor pixels
+            let cx = max(0, min(Int(w) - 1, Int(nx * w)))
+            let cy = max(0, min(Int(h) - 1, Int(y * h)))
+            
+            if let measurements = thermalImage.measurements,
+               let spot = try? measurements.addSpot(CGPoint(x: cx, y: cy)) {
+                result = spot.getValue().value
+                try? measurements.remove(spot)
+            }
+        }
+        return result
+#else
+        return Double.nan
+#endif
     }
     
     // MARK: - Legacy / Compatibility Methods
@@ -604,16 +630,21 @@ extension FlirManager: FLIRStreamDelegate {
         _isProcessingFrame = true
         renderQueue.async { [weak self] in
             defer { self?._isProcessingFrame = false }
-            guard let self = self, let streamer = self.streamer else {
-                NSLog("[FLIR-TRACE ❌] No self or streamer in renderQueue")
+            guard let self = self, self._isStreaming, let streamer = self.streamer else {
+                NSLog("[FLIR-TRACE ❌] No self, streamer or not streaming in renderQueue")
                 return
             }
             
             NSLog("[FLIR-TRACE 2️⃣] Processing on renderQueue")
             
             do {
-                try streamer.update()
-                NSLog("[FLIR-TRACE 3️⃣] Streamer updated successfully")
+                // Double check streaming state before update to prevent EXC_BAD_ACCESS during shutdown
+                if self._isStreaming {
+                    try streamer.update()
+                    NSLog("[FLIR-TRACE 3️⃣] Streamer updated successfully")
+                } else {
+                    return
+                }
             } catch {
                 NSLog("[FLIR-TRACE ❌] Streamer update failed: \(error)")
                 return
