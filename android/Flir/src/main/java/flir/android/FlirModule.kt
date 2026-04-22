@@ -34,7 +34,7 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     // Simple placeholder conversion: converts an ARGB color to a pseudo-temperature value.
     // Replace with SDK call when integrating thermalsdk APIs.
     @ReactMethod
-    fun getTemperatureFromColor(color: Int, promise: Promise) {
+    fun getTemperatureFromColor(color: Int, promise: Promise?) {
         try {
             val r = (color shr 16) and 0xFF
             val g = (color shr 8) and 0xFF
@@ -42,81 +42,81 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             // Luminance-like value scaled to a plausible temperature range (0°C - 400°C)
             val lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
             val temp = 0.0 + (lum / 255.0) * 400.0
-            promise.resolve(temp)
+            promise?.resolve(temp)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_CONVERT", e)
+            promise?.reject("ERR_FLIR_CONVERT", e)
         }
     }
 
     @ReactMethod
-    fun getLatestFramePath(promise: Promise) {
+    fun getLatestFramePath(promise: Promise?) {
         try {
             val path = FlirFrameCache.latestFramePath
-            if (path != null) promise.resolve(path) else promise.resolve(null)
+            if (path != null) promise?.resolve(path) else promise?.resolve(null)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_PATH", e)
+            promise?.reject("ERR_FLIR_PATH", e)
         }
     }
 
     @ReactMethod
-    fun getTemperatureAt(x: Int, y: Int, promise: Promise) {
+    fun getTemperatureAt(x: Int, y: Int, promise: Promise?) {
         try {
             val temp = FlirManager.getTemperatureAt(x, y)
-            if (temp != null) promise.resolve(temp) else promise.reject("ERR_NO_DATA", "No temperature data available")
+            if (temp != null) promise?.resolve(temp) else promise?.reject("ERR_NO_DATA", "No temperature data available")
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_SAMPLE", e)
+            promise?.reject("ERR_FLIR_SAMPLE", e)
         }
     }
 
     @ReactMethod
-    fun getTemperatureAtNormalized(nx: Double, ny: Double, promise: Promise) {
+    fun getTemperatureAtNormalized(nx: Double, ny: Double, promise: Promise?) {
         try {
             val temp = FlirManager.getTemperatureAtNormalized(nx, ny)
-            if (temp != null) promise.resolve(temp) else promise.resolve(null)
+            if (temp != null) promise?.resolve(temp) else promise?.resolve(null)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_TEMP_NORM", e)
+            promise?.reject("ERR_FLIR_TEMP_NORM", e)
         }
     }
     
     @ReactMethod
-    fun isEmulator(promise: Promise) {
+    fun isEmulator(promise: Promise?) {
         try {
-            promise.resolve(FlirManager.isEmulator())
+            promise?.resolve(FlirManager.isEmulator())
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_EMULATOR_CHECK", e)
+            promise?.reject("ERR_FLIR_EMULATOR_CHECK", e)
         }
     }
     
     @ReactMethod
-    fun isDeviceConnected(promise: Promise) {
+    fun isDeviceConnected(promise: Promise?) {
         try {
-            promise.resolve(FlirManager.isDeviceConnected())
+            promise?.resolve(FlirManager.isDeviceConnected())
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_DEVICE_CHECK", e)
+            promise?.reject("ERR_FLIR_DEVICE_CHECK", e)
         }
     }
     
     @ReactMethod
-    fun getConnectedDeviceInfo(promise: Promise) {
+    fun getConnectedDeviceInfo(promise: Promise?) {
         try {
-            promise.resolve(FlirManager.getConnectedDeviceInfo())
+            promise?.resolve(FlirManager.getConnectedDeviceInfo())
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_DEVICE_INFO", e)
+            promise?.reject("ERR_FLIR_DEVICE_INFO", e)
         }
     }
     
     @ReactMethod
-    fun isSDKDownloaded(promise: Promise) {
+    fun isSDKDownloaded(promise: Promise?) {
         try {
             val available = FlirSDKLoader.isSDKAvailable(reactContext)
-            promise.resolve(available)
+            promise?.resolve(available)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_SDK_CHECK", e)
+            promise?.reject("ERR_FLIR_SDK_CHECK", e)
         }
     }
     
     @ReactMethod
-    fun getSDKStatus(promise: Promise) {
+    fun getSDKStatus(promise: Promise?) {
         try {
             val available = FlirSDKLoader.isSDKAvailable(reactContext)
             val arch = FlirSDKLoader.getDeviceArch()
@@ -131,14 +131,14 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             result.putBoolean("dexExists", dexPath?.exists() == true)
             result.putBoolean("nativeLibsExist", nativeLibDir?.exists() == true)
             
-            promise.resolve(result)
+            promise?.resolve(result)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_SDK_STATUS", e)
+            promise?.reject("ERR_FLIR_SDK_STATUS", e)
         }
     }
     
     @ReactMethod
-    fun getDiscoveredDevices(promise: Promise) {
+    fun getDiscoveredDevices(promise: Promise?) {
         try {
             val devices = FlirManager.getDiscoveredDevices()
             val result = com.facebook.react.bridge.Arguments.createArray()
@@ -152,129 +152,153 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
                 result.pushMap(deviceMap)
             }
             
-            promise.resolve(result)
+            promise?.resolve(result)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_DEVICES", e)
+            promise?.reject("ERR_FLIR_DEVICES", e)
         }
     }
 
     @ReactMethod
-    fun setPreferSdkRotation(prefer: Boolean, promise: Promise) {
+    fun setPreferSdkRotation(prefer: Boolean, promise: Promise?) {
         try {
             FlirManager.setPreferSdkRotation(prefer)
-            promise.resolve(true)
+            promise?.resolve(true)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_SET_ROTATION_PREF", e)
+            promise?.reject("ERR_FLIR_SET_ROTATION_PREF", e)
         }
     }
 
     @ReactMethod
-    fun isPreferSdkRotation(promise: Promise) {
+    fun isPreferSdkRotation(promise: Promise?) {
         try {
             val v = FlirManager.isPreferSdkRotation()
-            promise.resolve(v)
+            promise?.resolve(v)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_GET_ROTATION_PREF", e)
+            promise?.reject("ERR_FLIR_GET_ROTATION_PREF", e)
         }
     }
 
     @ReactMethod
-    fun getBatteryLevel(promise: Promise) {
+    fun getBatteryLevel(promise: Promise?) {
         try {
             val level = FlirManager.getBatteryLevel()
-            promise.resolve(level)
+            promise?.resolve(level)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_GET_BATTERY", e)
+            promise?.reject("ERR_FLIR_GET_BATTERY", e)
         }
     }
 
     @ReactMethod
-    fun isBatteryCharging(promise: Promise) {
+    fun isBatteryCharging(promise: Promise?) {
         try {
             val v = FlirManager.isBatteryCharging()
-            promise.resolve(v)
+            promise?.resolve(v)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_CHARGING", e)
+            promise?.reject("ERR_FLIR_CHARGING", e)
         }
     }
     
     @ReactMethod
-    fun startEmulator(emulatorType: String, promise: Promise) {
+    fun startEmulator(emulatorType: String?, promise: Promise?) {
         try {
             // Ensure SDK is initialized with context before starting discovery
             FlirManager.init(reactContext)
             // With simplified API, just start discovery - emulators are discovered like any device
             FlirManager.startDiscovery(true)
-            promise.resolve(true)
+            promise?.resolve(true)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_EMULATOR", e)
+            promise?.reject("ERR_FLIR_EMULATOR", e)
         }
     }
     
     @ReactMethod
-    fun connectToDevice(deviceId: String, promise: Promise) {
+    fun connectToDevice(deviceId: String?, promise: Promise?) {
         try {
             // Ensure SDK is initialized with context before connecting
             FlirManager.init(reactContext)
-            FlirManager.connectToDevice(deviceId)
-            promise.resolve(true)
+            if (deviceId != null) {
+                FlirManager.connectToDevice(deviceId)
+            }
+            promise?.resolve(true)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_CONNECT", e)
+            promise?.reject("ERR_FLIR_CONNECT", e)
         }
     }
     
     @ReactMethod
-    fun startDiscovery(promise: Promise) {
+    fun startDiscovery(promise: Promise?) {
         try {
             // Ensure SDK is initialized with context before starting discovery
             FlirManager.init(reactContext)
             FlirManager.startDiscovery(true)
-            promise.resolve(true)
+            promise?.resolve(true)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_DISCOVERY", e)
+            promise?.reject("ERR_FLIR_DISCOVERY", e)
         }
     }
     
     @ReactMethod
-    fun stopDiscovery(promise: Promise) {
+    fun stopDiscovery(promise: Promise?) {
         try {
             FlirManager.stopDiscovery()
-            promise.resolve(true)
+            promise?.resolve(true)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_STOP_DISCOVERY", e)
+            promise?.reject("ERR_FLIR_STOP_DISCOVERY", e)
         }
     }
     
     @ReactMethod
-    fun stopFlir(promise: Promise) {
+    fun stopFlir(promise: Promise?) {
         try {
             FlirManager.stop()
-            promise.resolve(true)
+            promise?.resolve(true)
         } catch (e: Exception) {
-            promise.reject("ERR_FLIR_STOP", e)
+            promise?.reject("ERR_FLIR_STOP", e)
+        }
+    }
+
+    @ReactMethod
+    fun updateAcol(value: Float, promise: Promise?) {
+        try {
+            FlirManager.updateAcol(value)
+            promise?.resolve(true)
+        } catch (e: Exception) {
+            promise?.reject("ERR_FLIR_ACOL", e)
+        }
+    }
+
+    @ReactMethod
+    fun setPalette(name: String?, promise: Promise?) {
+        try {
+            if (name != null) {
+                FlirManager.setPalette(name)
+            }
+            promise?.resolve(true)
+        } catch (e: Exception) {
+            promise?.reject("ERR_FLIR_PALETTE", e)
         }
     }
     
     @ReactMethod
-    fun initializeSDK(promise: Promise) {
+    fun initializeSDK(promise: Promise?) {
         try {
             FlirManager.init(reactContext)
             
             val result = com.facebook.react.bridge.Arguments.createMap()
             result.putBoolean("initialized", true)
             result.putString("message", "SDK initialized successfully")
-            promise.resolve(result)
+            promise?.resolve(result)
         } catch (e: Exception) {
             val result = com.facebook.react.bridge.Arguments.createMap()
             result.putBoolean("initialized", false)
             result.putString("error", e.message ?: "Unknown error")
             result.putString("errorType", e.javaClass.simpleName)
-            promise.resolve(result)
+            promise?.resolve(result)
         }
     }
     
     @ReactMethod
-    fun getDebugInfo(promise: Promise) {
+    fun getDebugInfo(promise: Promise?) {
         try {
             val result = com.facebook.react.bridge.Arguments.createMap()
             
@@ -299,9 +323,9 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             result.putBoolean("isStreaming", FlirManager.isStreaming())
             result.putString("connectedDevice", FlirManager.getConnectedDeviceInfo())
             
-            promise.resolve(result)
+            promise?.resolve(result)
         } catch (e: Exception) {
-            promise.reject("ERR_DEBUG_INFO", e)
+            promise?.reject("ERR_DEBUG_INFO", e)
         }
     }
 }

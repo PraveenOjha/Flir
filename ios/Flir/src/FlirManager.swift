@@ -63,6 +63,13 @@ import ThermalSDK
     private var connectedDeviceId: String?
     private var connectedDeviceName: String?
     
+    // Internal synchronization
+    private let stateLock = NSObject()
+    
+    // Palette and Snapshot state
+    private var currentPaletteName: String = "iron"
+    private var pendingSnapshotPath: String?
+    
     // Dedicated render queue for frame processing (matches sample app pattern)
     private let renderQueue = DispatchQueue(label: "com.flir.render")
     
@@ -122,6 +129,7 @@ import ThermalSDK
     }
     
     @objc public func stopDiscovery() {
+        objc_sync_enter(stateLock); defer { objc_sync_exit(stateLock) }
         NSLog("[FlirManager] stopDiscovery")
         
 #if FLIR_ENABLED
@@ -133,6 +141,7 @@ import ThermalSDK
     // MARK: - Connection
     
     @objc public func connectToDevice(_ deviceId: String) {
+        objc_sync_enter(stateLock); defer { objc_sync_exit(stateLock) }
         NSLog("[FlirManager] connectToDevice: \(deviceId)")
         
 #if FLIR_ENABLED
@@ -270,10 +279,11 @@ import ThermalSDK
     }
     
     @objc public func disconnect() {
+        objc_sync_enter(stateLock); defer { objc_sync_exit(stateLock) }
         NSLog("[FlirManager] disconnect")
         
 #if FLIR_ENABLED
-        stopStream()
+        stopStreamInternalSync()
         camera?.disconnect()
         camera = nil
         _isConnected = false
@@ -289,9 +299,36 @@ import ThermalSDK
     }
     
     @objc public func stop() {
-        stopStream()
-        disconnect()
-        stopDiscovery()
+        objc_sync_enter(stateLock); defer { objc_sync_exit(stateLock) }
+        stopStreamInternalSync()
+        disconnectInternalSync()
+        stopDiscoveryInternalSync()
+    }
+    
+    private func stopDiscoveryInternalSync() {
+        NSLog("[FlirManager] stopDiscovery")
+#if FLIR_ENABLED
+        discovery?.stop()
+        emitStateChange("idle")
+#endif
+    }
+    
+    private func disconnectInternalSync() {
+        NSLog("[FlirManager] disconnect")
+#if FLIR_ENABLED
+        stopStreamInternalSync()
+        camera?.disconnect()
+        camera = nil
+        _isConnected = false
+        connectedDeviceId = nil
+        connectedDeviceName = nil
+        _latestImage = nil
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.delegate?.onDeviceDisconnected()
+            self?.emitStateChange("disconnected")
+        }
+#endif
     }
     
     // MARK: - Streaming
@@ -345,13 +382,18 @@ import ThermalSDK
 #endif
     
     @objc public func stopStream() {
+        objc_sync_enter(stateLock); defer { objc_sync_exit(stateLock) }
+        stopStreamInternalSync()
+    }
+
+    private func stopStreamInternalSync() {
         NSLog("[FlirManager] stopStream")
         
 #if FLIR_ENABLED
+        _isStreaming = false
         stream?.stop()
         stream = nil
         streamer = nil
-        _isStreaming = false
         _latestImage = nil
         
         if _isConnected {
@@ -468,11 +510,22 @@ import ThermalSDK
     }
     
     @objc public func setPalette(_ name: String) {
-        // stub
+        self.currentPaletteName = name
+        NSLog("[FlirManager] Requested palette: \(name)")
     }
     
     @objc public func setPaletteFromAcol(_ acol: Float) {
-        // stub
+        // Map acol (0..7) to palette names
+        let palettes = ["iron", "rainbow", "grayscale", "arctic", "lava", "contrast", "hotcold", "medical"]
+        let idx = Int(acol)
+        if idx >= 0 && idx < palettes.count {
+            setPalette(palettes[idx])
+        }
+    }
+
+    @objc public func captureRadiometricSnapshot(_ path: String) {
+        self.pendingSnapshotPath = path
+        NSLog("[FlirManager] Pending radiometric snapshot: \(path)")
     }
     
     @objc public func retainClient(_ clientId: String) {
@@ -637,14 +690,40 @@ extension FlirManager: FLIRStreamDelegate {
             
             NSLog("[FLIR-TRACE 2️⃣] Processing on renderQueue")
             
+            objc_sync_enter(self.stateLock)
+            let currentStreamer = self.streamer
+            let streaming = self._isStreaming
+            objc_sync_exit(self.stateLock)
+            
+            guard streaming, let streamer = currentStreamer else {
+                return
+            }
+
+            let paletteToApply = self.currentPaletteName
+            let snapshotPath = self.pendingSnapshotPath
+            self.pendingSnapshotPath = nil
+
             do {
-                // Double check streaming state before update to prevent EXC_BAD_ACCESS during shutdown
-                if self._isStreaming {
-                    try streamer.update()
-                    NSLog("[FLIR-TRACE 3️⃣] Streamer updated successfully")
-                } else {
-                    return
+                try streamer.update()
+                
+                streamer.withThermalImage { thermalImage in
+                    // 1. Apply Palette
+                    if let palette = thermalImage.paletteManager.getDefaultPalettes().first(where: { $0.name.lowercased() == paletteToApply.lowercased() }) {
+                        thermalImage.palette = palette
+                    }
+
+                    // 2. Save Radiometric Snapshot if requested
+                    if let path = snapshotPath {
+                        do {
+                            try thermalImage.save(to: path)
+                            NSLog("[FlirManager] Radiometric snapshot saved to: \(path)")
+                        } catch {
+                            NSLog("[FlirManager] Failed to save radiometric snapshot: \(error)")
+                        }
+                    }
                 }
+                
+                NSLog("[FLIR-TRACE 3️⃣] Streamer updated successfully")
             } catch {
                 NSLog("[FLIR-TRACE ❌] Streamer update failed: \(error)")
                 return

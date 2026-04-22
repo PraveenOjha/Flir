@@ -8,7 +8,10 @@ import android.util.Log;
 import com.flir.thermalsdk.ErrorCode;
 import com.flir.thermalsdk.androidsdk.ThermalSdkAndroid;
 import com.flir.thermalsdk.androidsdk.image.BitmapAndroid;
+import com.flir.thermalsdk.image.Palette;
+import com.flir.thermalsdk.image.PaletteManager;
 import com.flir.thermalsdk.image.Point;
+import com.flir.thermalsdk.image.ThermalImage;
 import com.flir.thermalsdk.image.ThermalValue;
 import com.flir.thermalsdk.live.AuthenticationResponse;
 import com.flir.thermalsdk.live.Camera;
@@ -48,8 +51,10 @@ public class FlirSdkManager {
     private Stream activeStream;
     private final List<Identity> discoveredDevices = Collections.synchronizedList(new ArrayList<>());
     private volatile Bitmap latestBitmap;
+    private volatile String currentPaletteName = "iron";
     private final AtomicBoolean isProcessingFrame = new AtomicBoolean(false);
     private boolean useHalfScale = false;
+    private String pendingSnapshotPath = null;
 
     // Listener
     private Listener listener;
@@ -337,14 +342,42 @@ public class FlirSdkManager {
                                 if (streamer != null && activeStream != null) {
                                     streamer.update();
                                     
-                                    // createBitmap is safe to do here or in executor
-                                    Bitmap bitmap = BitmapAndroid.createBitmap(streamer.getImage()).getBitMap();
-                                    if (bitmap != null) {
-                                        latestBitmap = bitmap;
-                                        if (listener != null) {
-                                            listener.onFrame(bitmap);
+                                    final String paletteToApply = currentPaletteName;
+                                    final String snapshotPath = pendingSnapshotPath;
+                                    pendingSnapshotPath = null;
+
+                                    streamer.withThermalImage(thermalImage -> {
+                                        // 1. Apply Palette
+                                        if (paletteToApply != null) {
+                                            Palette palette = 
+                                                PaletteManager.getDefaultPalettes().stream()
+                                                    .filter(p -> p.name.equalsIgnoreCase(paletteToApply))
+                                                    .findFirst()
+                                                    .orElse(null);
+                                            if (palette != null) {
+                                                thermalImage.setPalette(palette);
+                                            }
                                         }
-                                    }
+
+                                        // 2. Save Radiometric Snapshot if requested
+                                        if (snapshotPath != null) {
+                                            try {
+                                                thermalImage.saveAs(snapshotPath);
+                                                Log.i(TAG, "Radiometric snapshot saved to: " + snapshotPath);
+                                            } catch (java.io.IOException e) {
+                                                Log.e(TAG, "Failed to save radiometric snapshot", e);
+                                            }
+                                        }
+
+                                        // 3. Generate Bitmap for display
+                                        Bitmap bitmap = BitmapAndroid.createBitmap(thermalImage.getImage()).getBitMap();
+                                        if (bitmap != null) {
+                                            latestBitmap = bitmap;
+                                            if (listener != null) {
+                                                listener.onFrame(bitmap);
+                                            }
+                                        }
+                                    });
                                 }
                             } catch (Exception e) {
                                 Log.e(TAG, "Frame processing error", e);
@@ -423,6 +456,16 @@ public class FlirSdkManager {
     }
 
     // ==================== LISTENERS ====================
+    
+    public void setPalette(String paletteName) {
+        this.currentPaletteName = paletteName;
+        Log.d(TAG, "Requested palette: " + paletteName);
+    }
+
+    public void captureRadiometricSnapshot(String path) {
+        this.pendingSnapshotPath = path;
+        Log.d(TAG, "Pending radiometric snapshot: " + path);
+    }
 
     private final DiscoveryEventListener discoveryListener = new DiscoveryEventListener() {
         @Override

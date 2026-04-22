@@ -161,7 +161,7 @@ RCT_EXPORT_METHOD(setNetworkDiscoveryEnabled : (BOOL)enabled resolver : (
         setBool:enabled
          forKey:@"ilabsFlir.networkDiscoveryEnabled"];
   }
-  resolve(@(YES));
+  if (resolve) resolve(@(YES));
 }
 
 RCT_EXPORT_METHOD(startDiscovery : (RCTPromiseResolveBlock)
@@ -178,7 +178,7 @@ RCT_EXPORT_METHOD(startDiscovery : (RCTPromiseResolveBlock)
       NSLog(@"[FlirModule] [%@] ⏱ FlirManager.startDiscovery returned",
             [NSDate date]);
     }
-    resolve(@(YES));
+    if (resolve) resolve(@(YES));
   });
 }
 
@@ -191,7 +191,7 @@ RCT_EXPORT_METHOD(stopDiscovery : (RCTPromiseResolveBlock)
       ((void (*)(id, SEL))objc_msgSend)(manager,
                                         sel_registerName("stopDiscovery"));
     }
-    resolve(@(YES));
+    if (resolve) resolve(@(YES));
   });
 }
 
@@ -211,12 +211,16 @@ RCT_EXPORT_METHOD(getDiscoveredDevices : (RCTPromiseResolveBlock)
         }
       }
     }
-    resolve(arr);
+    if (resolve) resolve(arr);
   });
 }
 
 RCT_EXPORT_METHOD(connectToDevice : (NSString *)deviceId resolver : (
     RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  if (!deviceId) {
+    if (reject) reject(@"ERR_INVALID_ARGS", @"deviceId is required", nil);
+    return;
+  }
   NSLog(@"[FlirModule] [%@] ⏱ RN->connectToDevice called for: %@",
         [NSDate date], deviceId);
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -242,10 +246,10 @@ RCT_EXPORT_METHOD(connectToDevice : (NSString *)deviceId resolver : (
             [NSDate date]);
 
       // Resolve immediately - connection status will come via events
-      resolve(@(YES));
+      if (resolve) resolve(@(YES));
     } else {
       NSLog(@"[FlirModule] [%@] ❌ FlirManager not found", [NSDate date]);
-      reject(@"ERR_NO_MANAGER", @"FlirManager not found", nil);
+      if (reject) reject(@"ERR_NO_MANAGER", @"FlirManager not found", nil);
     }
   });
 }
@@ -261,7 +265,7 @@ RCT_EXPORT_METHOD(disconnect : (RCTPromiseResolveBlock)
       ((void (*)(id, SEL))objc_msgSend)(manager,
                                         sel_registerName("disconnect"));
     }
-    resolve(@(YES));
+    if (resolve) resolve(@(YES));
   });
 }
 
@@ -274,7 +278,7 @@ RCT_EXPORT_METHOD(stopFlir : (RCTPromiseResolveBlock)
       [[FlirState shared] reset];
       ((void (*)(id, SEL))objc_msgSend)(manager, sel_registerName("stop"));
     }
-    resolve(@(YES));
+    if (resolve) resolve(@(YES));
   });
 }
 
@@ -295,13 +299,13 @@ RCT_EXPORT_METHOD(startEmulator : (NSString *)emulatorType resolver : (
 
       // Initiate emulator start asynchronously
       ((void (*)(id, SEL, id))objc_msgSend)(
-          manager, sel_registerName("startEmulatorWithType:"), emulatorType);
+          manager, sel_registerName("startEmulatorWithType:"), emulatorType ?: @"FLIR_ONE_EDGE");
 
       // Resolve immediately - connection status will come via events
-      resolve(@(YES));
+      if (resolve) resolve(@(YES));
     } else {
       // Fallback if selector assumption wrong/mismatch
-      reject(@"ERR_NOT_IMPL",
+      if (reject) reject(@"ERR_NOT_IMPL",
              @"startEmulator not implemented or signature mismatch", nil);
       self.connectResolve = nil;
       self.connectReject = nil;
@@ -323,9 +327,9 @@ RCT_EXPORT_METHOD(getTemperatureAt : (nonnull NSNumber *)x y : (
           [y intValue]);
     }
     if (isnan(temp)) {
-      resolve([NSNull null]);
+      if (resolve) resolve([NSNull null]);
     } else {
-      resolve(@(temp));
+      if (resolve) resolve(@(temp));
     }
   });
 }
@@ -346,9 +350,9 @@ RCT_EXPORT_METHOD(getTemperatureAtNormalized : (nonnull NSNumber *)nx y : (
           [nx doubleValue], [ny doubleValue]);
     }
     if (isnan(temp)) {
-      resolve([NSNull null]);
+      if (resolve) resolve([NSNull null]);
     } else {
-      resolve(@(temp));
+      if (resolve) resolve(@(temp));
     }
   });
 }
@@ -360,7 +364,7 @@ RCT_EXPORT_METHOD(getTemperatureFromColor : (NSInteger)color resolver : (
   int b = color & 0xFF;
   double lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
   double temp = (lum / 255.0) * 400.0;
-  resolve(@(temp));
+  if (resolve) resolve(@(temp));
 }
 
 RCT_EXPORT_METHOD(isEmulator : (RCTPromiseResolveBlock)
@@ -373,7 +377,7 @@ RCT_EXPORT_METHOD(isEmulator : (RCTPromiseResolveBlock)
       isEm = ((BOOL (*)(id, SEL))objc_msgSend)(manager,
                                                sel_registerName("isEmulator"));
     }
-    resolve(@(isEm));
+    if (resolve) resolve(@(isEm));
   });
 }
 
@@ -384,15 +388,15 @@ RCT_EXPORT_METHOD(getLatestFrameBitmap : (RCTPromiseResolveBlock)
     if (!manager ||
         ![manager
             respondsToSelector:sel_registerName("latestFrameBitmapBase64")]) {
-      resolve([NSNull null]);
+      if (resolve) resolve([NSNull null]);
       return;
     }
     NSDictionary *dict = ((NSDictionary * (*)(id, SEL)) objc_msgSend)(
         manager, sel_registerName("latestFrameBitmapBase64"));
     if (!dict) {
-      resolve([NSNull null]);
+      if (resolve) resolve([NSNull null]);
     } else {
-      resolve(dict);
+      if (resolve) resolve(dict);
     }
   });
 }
@@ -407,7 +411,7 @@ RCT_EXPORT_METHOD(isDeviceConnected : (RCTPromiseResolveBlock)
       isC = ((BOOL (*)(id, SEL))objc_msgSend)(manager,
                                               sel_registerName("isConnected"));
     }
-    resolve(@(isC));
+    if (resolve) resolve(@(isC));
   });
 }
 
@@ -421,19 +425,17 @@ RCT_EXPORT_METHOD(getConnectedDeviceInfo : (RCTPromiseResolveBlock)
       info = ((NSString * (*)(id, SEL)) objc_msgSend)(
           manager, sel_registerName("getConnectedDeviceInfo"));
     }
-    resolve(info);
+    if (resolve) resolve(info);
   });
 }
 
-RCT_EXPORT_METHOD(isSDKDownloaded : (RCTPromiseResolveBlock)
-                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
   // Assuming integrated SDK
-  resolve(@(YES));
+  if (resolve) resolve(@(YES));
 }
 
 RCT_EXPORT_METHOD(getSDKStatus : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {
-  resolve(@{@"available" : @(YES), @"arch" : @"arm64", @"platform" : @"iOS"});
+  if (resolve) resolve(@{@"available" : @(YES), @"arch" : @"arm64", @"platform" : @"iOS"});
 }
 
 RCT_EXPORT_METHOD(getBatteryLevel : (RCTPromiseResolveBlock)
@@ -446,7 +448,7 @@ RCT_EXPORT_METHOD(getBatteryLevel : (RCTPromiseResolveBlock)
       level = ((int (*)(id, SEL))objc_msgSend)(
           manager, sel_registerName("getBatteryLevel"));
     }
-    resolve(@(level));
+    if (resolve) resolve(@(level));
   });
 }
 
@@ -460,7 +462,7 @@ RCT_EXPORT_METHOD(isBatteryCharging : (RCTPromiseResolveBlock)
       ch = ((BOOL (*)(id, SEL))objc_msgSend)(
           manager, sel_registerName("isBatteryCharging"));
     }
-    resolve(@(ch));
+    if (resolve) resolve(@(ch));
   });
 }
 
@@ -473,7 +475,35 @@ RCT_EXPORT_METHOD(setPreferSdkRotation : (BOOL)prefer resolver : (
       ((void (*)(id, SEL, BOOL))objc_msgSend)(
           manager, sel_registerName("setPreferSdkRotation:"), prefer);
     }
-    resolve(@(YES));
+    if (resolve) resolve(@(YES));
+  });
+}
+
+RCT_EXPORT_METHOD(setPalette : (NSString *)name resolver : (RCTPromiseResolveBlock)
+                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    id manager = flir_manager_shared();
+    if (manager &&
+        [manager respondsToSelector:sel_registerName("setPalette:")]) {
+      ((void (*)(id, SEL, id))objc_msgSend)(manager,
+                                            sel_registerName("setPalette:"),
+                                            name);
+    }
+    if (resolve) resolve(@(YES));
+  });
+}
+
+RCT_EXPORT_METHOD(captureRadiometricSnapshot : (NSString *)path resolver : (RCTPromiseResolveBlock)
+                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    id manager = flir_manager_shared();
+    if (manager &&
+        [manager respondsToSelector:sel_registerName("captureRadiometricSnapshot:")]) {
+      ((void (*)(id, SEL, id))objc_msgSend)(manager,
+                                            sel_registerName("captureRadiometricSnapshot:"),
+                                            path);
+    }
+    if (resolve) resolve(@(YES));
   });
 }
 
@@ -487,7 +517,7 @@ RCT_EXPORT_METHOD(isPreferSdkRotation : (RCTPromiseResolveBlock)
       v = ((BOOL (*)(id, SEL))objc_msgSend)(
           manager, sel_registerName("isPreferSdkRotation"));
     }
-    resolve(@(v));
+    if (resolve) resolve(@(v));
   });
 }
 

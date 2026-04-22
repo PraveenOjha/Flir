@@ -71,7 +71,19 @@ object FlirManager {
     fun isPreferSdkRotation(): Boolean = false
     fun getBatteryLevel(): Int = -1
     fun isBatteryCharging(): Boolean = false
-    fun setPalette(name: String) { /* No-op */ }
+    fun setPalette(name: String) {
+        sdkManager?.setPalette(name)
+        // Also try to update the app's global Var.cool if possible
+        try {
+            val palettes = listOf("iron", "rainbow", "grayscale", "arctic", "lava", "contrast", "hotcold", "medical")
+            val idx = palettes.indexOf(name.lowercase())
+            if (idx != -1) {
+                // If we found the index, we use the raw value. 
+                // But if the name itself is passed as a number or from a loop, handle it.
+                updateAcol(idx.toFloat())
+            }
+        } catch (e: Exception) {}
+    }
     fun getAvailablePalettes(): List<String> = emptyList()
     
     /**
@@ -95,6 +107,7 @@ object FlirManager {
     /**
      * Start scanning
      */
+    @Synchronized
     fun startDiscovery(retry: Boolean = false) {
         if (!isInitialized && reactContext != null) {
             init(reactContext!!)
@@ -102,6 +115,7 @@ object FlirManager {
         
         if (isScanning && !retry) return
         
+        Log.i(TAG, "Starting FlirManager discovery...")
         isScanning = true
         emitDeviceState("discovering")
         sdkManager?.scan()
@@ -118,7 +132,9 @@ object FlirManager {
     /**
      * Stop scanning
      */
+    @Synchronized
     fun stopDiscovery() {
+        Log.i(TAG, "Stopping FlirManager discovery...")
         sdkManager?.stopScan()
         isScanning = false
     }
@@ -126,7 +142,12 @@ object FlirManager {
     /**
      * Connect to a device
      */
-    fun connectToDevice(deviceId: String) {
+    @Synchronized
+    fun connectToDevice(deviceId: String?) {
+        if (deviceId == null) {
+            Log.e(TAG, "connectToDevice: deviceId is null")
+            return
+        }
         Log.i(TAG, "connectToDevice: $deviceId")
         
         val devices = sdkManager?.discoveredDevices ?: emptyList()
@@ -148,7 +169,9 @@ object FlirManager {
     /**
      * Disconnect
      */
+    @Synchronized
     fun disconnect() {
+        Log.i(TAG, "Disconnecting FlirManager...")
         shouldProcessFrames.set(false)
         sdkManager?.disconnect()
         isConnected = false
@@ -160,11 +183,19 @@ object FlirManager {
     /**
      * Stop everything
      */
+    @Synchronized
     fun stop() {
+        Log.i(TAG, "Stopping FlirManager completely...")
         shouldProcessFrames.set(false)
+        
+        // Clear callbacks first to prevent any more frames/updates from hitting Java/RN
+        textureCallback = null
+        temperatureCallback = null
+        
         disconnect()
         stopDiscovery()
         latestBitmap = null
+        Log.i(TAG, "FlirManager stopped")
     }
     
     // Stub legacy methods
@@ -208,6 +239,13 @@ object FlirManager {
     }
     
      /**
+     * Capture a high-fidelity radiometric snapshot (saves thermal data)
+     */
+    fun captureRadiometricSnapshot(path: String) {
+        sdkManager?.captureRadiometricSnapshot(path)
+    }
+
+    /**
      * Get latest frame as file path (for RN)
      */
     fun getLatestFramePath(): String? {
@@ -382,6 +420,33 @@ object FlirManager {
     fun enableEmulatorMode() = startDiscovery()
     fun forceEmulatorMode(type: String = "FLIR_ONE_EDGE") { startDiscovery() }
     fun setPreferredEmulatorType(type: String) { }
-    fun updateAcol(value: Float) { }
+    fun updateAcol(value: Float) {
+        Log.d(TAG, "updateAcol: $value")
+        // Use reflection to update ilabs.libs.io.data.Var.cool to avoid circular dependency
+        try {
+            val varClass = Class.forName("ilabs.libs.io.data.Var")
+            val coolField = varClass.getField("cool")
+            
+            // Modular logic for palettes: if index > 7, wrap around (17 mod 8)
+            // But we keep shader variants (14, 15, 16) as-is if within that range
+            val rawIdx = value.toInt()
+            var shaderIdx = rawIdx
+            if (shaderIdx > 16) {
+                shaderIdx = shaderIdx % 16 // Shader loop
+            }
+            
+            coolField.set(null, shaderIdx)
+            Log.d(TAG, "Updated Var.cool to $shaderIdx via reflection (raw=$rawIdx)")
+
+            // If we are in FLIR mode, also notify the SDK palette with modular loop
+            val palettes = listOf("iron", "rainbow", "grayscale", "arctic", "lava", "contrast", "hotcold", "medical")
+            val paletteIdx = rawIdx % palettes.size
+            val safeIdx = if (paletteIdx < 0) paletteIdx + palettes.size else paletteIdx
+            sdkManager?.setPalette(palettes[safeIdx])
+            
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not update Var.cool via reflection: ${e.message}")
+        }
+    }
     fun destroy() { stop() }
 }
