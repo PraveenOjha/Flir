@@ -89,9 +89,6 @@ static FlirState *_sharedState = nil;
 
 - (void)updateFrame:(UIImage *)image
     withTemperatureData:(NSArray<NSNumber *> *)tempData {
-  if (!image)
-    return;
-
   dispatch_async(_accessQueue, ^{
     self.latestImage = image;
 
@@ -157,6 +154,15 @@ static FlirState *_sharedState = nil;
     self->_temperatureData = nil;
     self->_imageWidth = 0;
     self->_imageHeight = 0;
+    
+    // Notify view to clear instantly
+    if (self.onTextureUpdate) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.onTextureUpdate) {
+          self.onTextureUpdate(nil, 7);
+        }
+      });
+    }
   });
 }
 

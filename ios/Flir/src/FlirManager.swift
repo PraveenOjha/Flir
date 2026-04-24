@@ -67,7 +67,7 @@ import ThermalSDK
     private let stateLock = NSObject()
     
     // Palette and Snapshot state
-    private var currentPaletteName: String = "iron"
+    private var currentPaletteName: String = "WhiteHot"
     private var pendingSnapshotPath: String?
     
     // Dedicated render queue for frame processing (matches sample app pattern)
@@ -91,6 +91,11 @@ import ThermalSDK
     private override init() {
         super.init()
         NSLog("[FlirManager] Initialized")
+        
+        // Generate palette icons on background thread
+        DispatchQueue.global().async {
+            self.generatePaletteIcons()
+        }
     }
     
     // MARK: - Public State
@@ -157,7 +162,13 @@ import ThermalSDK
             disconnect()
         }
         
-        // Connect on background thread (matches sample app)
+        // Stop discovery before connecting to free up SDK resources
+        // This prevents resource contention in the native SDK layer.
+        if discovery != nil {
+            discovery?.stop()
+        }
+        
+        // Connect on background thread (matches sample app pattern)
         DispatchQueue.global().async { [weak self] in
             guard let self = self else { return }
             
@@ -186,7 +197,8 @@ import ThermalSDK
                 NSLog("[FlirManager] Network camera detected — authenticating...")
                 
                 // Use UUID-based persistent certificate name (matches FLIR sample).
-                // The camera has a bug where re-auth with a different name conflicts.
+                // The camera has a bug where re-auth with a different name can conflict,
+                // so we generate a UUID once and persist it in UserDefaults.
                 let certName = self.getPersistentCertificateName()
                 NSLog("[FlirManager] Using certificate name: \(certName)")
                 
@@ -430,7 +442,7 @@ import ThermalSDK
                 // Compiler says it is NOT optional here, so direct assignment.
                 let value = spot.getValue()
                 result = value.value
-
+                
                 try? measurements.remove(spot)
             }
         }
@@ -439,8 +451,6 @@ import ThermalSDK
         return Double.nan
 #endif
     }
-    
-
     
     @objc public func getTemperatureAtNormalized(_ nx: Double, y: Double) -> Double {
 #if FLIR_ENABLED
@@ -453,10 +463,10 @@ import ThermalSDK
             
             // Map normalized (0.0 - 1.0) to actual sensor pixels
             let cx = max(0, min(Int(w) - 1, Int(nx * w)))
-            let cy = max(0, min(Int(h) - 1, Int(y * h)))
+            let cy_fixed = max(0, min(Int(h) - 1, Int(y * h)))
             
             if let measurements = thermalImage.measurements,
-               let spot = try? measurements.addSpot(CGPoint(x: cx, y: cy)) {
+               let spot = try? measurements.addSpot(CGPoint(x: cx, y: cy_fixed)) {
                 result = spot.getValue().value
                 try? measurements.remove(spot)
             }
@@ -498,8 +508,6 @@ import ThermalSDK
 
     // MARK: - Battery (stub - not needed per user)
     
-    // MARK: - Battery (stub - not needed per user)
-    
     @objc public func getBatteryLevel() -> Int { return -1 }
     @objc public func isBatteryCharging() -> Bool { return false }
     
@@ -515,12 +523,34 @@ import ThermalSDK
     }
     
     @objc public func setPaletteFromAcol(_ acol: Float) {
-        // Map acol (0..7) to palette names
-        let palettes = ["iron", "rainbow", "grayscale", "arctic", "lava", "contrast", "hotcold", "medical"]
+        let palettes = getAvailablePalettes()
         let idx = Int(acol)
-        if idx >= 0 && idx < palettes.count {
-            setPalette(palettes[idx])
+        let maxEff = palettes.count
+        if maxEff > 0 {
+            let paletteIdx = idx % maxEff
+            let safeIdx = paletteIdx < 0 ? paletteIdx + maxEff : paletteIdx
+            setPalette(palettes[safeIdx])
         }
+    }
+
+    @objc public func getAvailablePalettes() -> [String] {
+        return ["WhiteHot", "Iron", "Rainbow", "Arctic", "Lava", "Coldest", "Hottest", "Wheel"]
+    }
+
+    @objc public func generatePaletteIcons() -> [[String: String]] {
+        let paletteNames = getAvailablePalettes()
+        var results: [[String: String]] = []
+        for name in paletteNames {
+            results.append([
+                "name": name,
+                "uri": "" // No URI - rely on local assets if any
+            ])
+        }
+        return results
+    }
+
+    @objc public func getPalettesWithIcons() -> [[String: String]] {
+        return generatePaletteIcons()
     }
 
     @objc public func captureRadiometricSnapshot(_ path: String) {
@@ -572,20 +602,15 @@ import ThermalSDK
         return newName
     }
     
-#if FLIR_ENABLED
-    private func interfaceName(_ iface: FLIRCommunicationInterface) -> String {
-        if iface.contains(.lightning) { return "LIGHTNING" }
-        if iface.contains(.network) { return "NETWORK" }
-        if iface.contains(.flirOneWireless) { return "WIRELESS" }
-        if iface.contains(.emulator) { return "EMULATOR" }
+    private func interfaceName(_ iface: Int) -> String {
+        // Placeholder for interface name mapping
         return "UNKNOWN"
     }
-#endif
 }
 
+#if FLIR_ENABLED
 // MARK: - Discovery Delegate
 
-#if FLIR_ENABLED
 extension FlirManager: FLIRDiscoveryEventDelegate {
     public func cameraDiscovered(_ camera: FLIRDiscoveredCamera) {
         let identity = camera.identity
@@ -600,7 +625,7 @@ extension FlirManager: FLIRDiscoveryEventDelegate {
         let deviceInfo = FlirDeviceInfo(
             deviceId: deviceId,
             name: camera.displayName ?? deviceId,
-            communicationType: interfaceName(identity.communicationInterface()),
+            communicationType: interfaceName(Int(identity.communicationInterface().rawValue)),
             isEmulator: identity.communicationInterface() == .emulator
         )
         
@@ -621,7 +646,7 @@ extension FlirManager: FLIRDiscoveryEventDelegate {
     }
     
     public func discoveryFinished(_ iface: FLIRCommunicationInterface) {
-        NSLog("[FlirManager] Discovery finished: \(iface)")
+        NSLog("[FlirManager] Discovery finished: \(iface.rawValue)")
     }
     
     public func cameraLost(_ cameraIdentity: FLIRIdentity) {
@@ -637,11 +662,9 @@ extension FlirManager: FLIRDiscoveryEventDelegate {
         }
     }
 }
-#endif
 
 // MARK: - Camera Delegate
 
-#if FLIR_ENABLED
 extension FlirManager: FLIRDataReceivedDelegate {
     public func onDisconnected(_ camera: FLIRCamera, withError error: Error?) {
         NSLog("[FlirManager] Camera disconnected: \(error?.localizedDescription ?? "clean")")
@@ -658,11 +681,9 @@ extension FlirManager: FLIRDataReceivedDelegate {
         }
     }
 }
-#endif
 
 // MARK: - Stream Delegate
 
-#if FLIR_ENABLED
 extension FlirManager: FLIRStreamDelegate {
     public func onError(_ error: Error) {
         NSLog("[FlirManager] Stream error: \(error)")
@@ -670,13 +691,10 @@ extension FlirManager: FLIRStreamDelegate {
     }
     
     public func onImageReceived() {
-        NSLog("[FLIR-TRACE 1️⃣] onImageReceived called on SDK thread")
-        
         // Process frame on dedicated render queue (matches sample app pattern)
         // This prevents blocking the SDK callback thread and main thread
         // Guard to skip frame if already processing (prevents backpressure/latency)
         guard !_isProcessingFrame else {
-            NSLog("[FLIR-TRACE ⏩] Skipping frame (already processing)")
             return
         }
         
@@ -684,11 +702,8 @@ extension FlirManager: FLIRStreamDelegate {
         renderQueue.async { [weak self] in
             defer { self?._isProcessingFrame = false }
             guard let self = self, self._isStreaming, let streamer = self.streamer else {
-                NSLog("[FLIR-TRACE ❌] No self, streamer or not streaming in renderQueue")
                 return
             }
-            
-            NSLog("[FLIR-TRACE 2️⃣] Processing on renderQueue")
             
             objc_sync_enter(self.stateLock)
             let currentStreamer = self.streamer
@@ -708,7 +723,26 @@ extension FlirManager: FLIRStreamDelegate {
                 
                 streamer.withThermalImage { thermalImage in
                     // 1. Apply Palette
-                    if let palette = thermalImage.paletteManager.getDefaultPalettes().first(where: { $0.name.lowercased() == paletteToApply.lowercased() }) {
+                    let sdkPalettes = thermalImage.paletteManager.getDefaultPalettes()
+                    var targetPalette: FLIRPalette? = nil
+                    
+                    if paletteToApply.lowercased() == "gray" || paletteToApply.lowercased() == "grayscale" {
+                        // Map Gray to WhiteHot (standard SDK name)
+                        targetPalette = sdkPalettes.first(where: { 
+                            $0.name.lowercased() == "whitehot" || $0.name.lowercased() == "white hot" 
+                        })
+                    } else {
+                        targetPalette = sdkPalettes.first(where: { $0.name.lowercased() == paletteToApply.lowercased() })
+                        
+                        // Fallback for Wheel
+                        if targetPalette == nil && paletteToApply.lowercased() == "wheel" {
+                            targetPalette = sdkPalettes.first(where: {
+                                $0.name.contains("Wheel") || $0.name.contains("ColorWheel") || $0.name.contains("Rainbow")
+                            })
+                        }
+                    }
+                    
+                    if let palette = targetPalette {
                         thermalImage.palette = palette
                     }
 
@@ -721,28 +755,22 @@ extension FlirManager: FLIRStreamDelegate {
                             NSLog("[FlirManager] Failed to save radiometric snapshot: \(error)")
                         }
                     }
+
+                    // 3. Generate UIImage for display
+                    // Grab the image while the thermal image is locked to ensure settings are applied
+                    if let image = streamer.getImage() {
+                        self._latestImage = image
+                        let width = Int(image.size.width)
+                        let height = Int(image.size.height)
+                        
+                        DispatchQueue.main.async { [weak self] in
+                            self?.delegate?.onFrameReceived(image, width: width, height: height)
+                        }
+                    }
                 }
-                
-                NSLog("[FLIR-TRACE 3️⃣] Streamer updated successfully")
             } catch {
-                NSLog("[FLIR-TRACE ❌] Streamer update failed: \(error)")
+                NSLog("[FlirManager] Streamer update failed: \(error)")
                 return
-            }
-            
-            guard let image = streamer.getImage() else {
-                NSLog("[FLIR-TRACE ❌] streamer.getImage() returned nil")
-                return
-            }
-            
-            NSLog("[FLIR-TRACE 4️⃣] Got image from streamer: \(image.size.width)x\(image.size.height)")
-            
-            self._latestImage = image
-            let width = Int(image.size.width)
-            let height = Int(image.size.height)
-            
-            DispatchQueue.main.async { [weak self] in
-                NSLog("[FLIR-TRACE 5️⃣] Dispatching to delegate.onFrameReceived on main thread")
-                self?.delegate?.onFrameReceived(image, width: width, height: height)
             }
         }
     }

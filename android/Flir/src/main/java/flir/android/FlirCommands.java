@@ -122,15 +122,15 @@ public final class FlirCommands {
     
     private static String mapAcolToPaletteName(int acol) {
         switch (acol) {
-            case 0: return "gray";
-            case 1: return "iron";
-            case 2: return "rainbow";
-            case 3: return "lava";
-            case 4: return "arctic";
-            case 5: return "coldest";
-            case 6: return "hottest";
-            case 7: return "contrast";
-            default: return "iron";
+            case 0: return "WhiteHot";
+            case 1: return "Iron";
+            case 2: return "Rainbow";
+            case 3: return "Arctic";
+            case 4: return "Lava";
+            case 5: return "Coldest";
+            case 6: return "Hottest";
+            case 7: return "Wheel";
+            default: return "Iron";
         }
     }
 }

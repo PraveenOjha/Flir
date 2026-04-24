@@ -10,6 +10,8 @@ import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.facebook.react.uimanager.ThemedReactContext
 import com.flir.thermalsdk.live.Identity
+import com.flir.thermalsdk.image.Palette
+import com.flir.thermalsdk.image.PaletteManager
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicLong
@@ -27,6 +29,13 @@ object FlirManager {
     // Frame rate limiting for RN events
     private val lastEmitMs = AtomicLong(0)
     private val minEmitIntervalMs = 100L // ~10 fps max for RN events
+    
+    // Cached palette list to avoid repeated JNI calls (especially if linkage is unstable)
+    private var cachedPalettes: List<*>? = null
+    private var cachedPaletteNames: List<String>? = null
+    
+    // Cached reflection for performance
+    private var coolField: java.lang.reflect.Field? = null
     
     // State
     private var isInitialized = false
@@ -71,20 +80,26 @@ object FlirManager {
     fun isPreferSdkRotation(): Boolean = false
     fun getBatteryLevel(): Int = -1
     fun isBatteryCharging(): Boolean = false
+    
     fun setPalette(name: String) {
         sdkManager?.setPalette(name)
         // Also try to update the app's global Var.cool if possible
         try {
-            val palettes = listOf("iron", "rainbow", "grayscale", "arctic", "lava", "contrast", "hotcold", "medical")
-            val idx = palettes.indexOf(name.lowercase())
+            val palettes = getAvailablePalettes()
+            val idx = palettes.indexOfFirst { it.equals(name, ignoreCase = true) }
             if (idx != -1) {
-                // If we found the index, we use the raw value. 
-                // But if the name itself is passed as a number or from a loop, handle it.
                 updateAcol(idx.toFloat())
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "setPalette: Failed to update Var.cool", e)
+        }
     }
-    fun getAvailablePalettes(): List<String> = emptyList()
+    
+    fun getAvailablePalettes(): List<String> {
+        // Return hardcoded list to avoid PaletteManager class-loading crashes
+        // and ensure maximum performance. Matches standard FLIR and shader palettes.
+        return listOf("WhiteHot", "Iron", "Rainbow", "Arctic", "Lava", "Coldest", "Hottest", "Wheel")
+    }
     
     /**
      * Initialize the FLIR SDK
@@ -241,8 +256,8 @@ object FlirManager {
      /**
      * Capture a high-fidelity radiometric snapshot (saves thermal data)
      */
-    fun captureRadiometricSnapshot(path: String) {
-        sdkManager?.captureRadiometricSnapshot(path)
+    fun captureRadiometricSnapshot(path: String, callback: FlirSdkManager.SnapshotCallback? = null) {
+        sdkManager?.captureRadiometricSnapshot(path, callback)
     }
 
     /**
@@ -324,9 +339,6 @@ object FlirManager {
                     }
                 }
             }
-            
-            // Notify RN - disabled
-            // emitFrameToReactNative(bitmap)
         }
         
         override fun onError(message: String) {
@@ -335,26 +347,6 @@ object FlirManager {
     }
     
     // React Native Emitters
-    
-    private fun emitFrameToReactNative(bitmap: Bitmap) {
-        // PERF: Disabled to reduce bridge traffic
-        /*
-        val now = System.currentTimeMillis()
-        if (now - lastEmitMs.get() < minEmitIntervalMs) return
-        lastEmitMs.set(now)
-        
-        val ctx = reactContext ?: return
-        try {
-            val params = Arguments.createMap().apply {
-                putInt("width", bitmap.width)
-                putInt("height", bitmap.height)
-                putDouble("timestamp", now.toDouble())
-            }
-            ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                .emit("FlirFrameReceived", params)
-        } catch (e: Exception) { }
-        */
-    }
     
     private fun emitDeviceState(state: String) {
         val ctx = reactContext ?: return
@@ -421,32 +413,53 @@ object FlirManager {
     fun forceEmulatorMode(type: String = "FLIR_ONE_EDGE") { startDiscovery() }
     fun setPreferredEmulatorType(type: String) { }
     fun updateAcol(value: Float) {
-        Log.d(TAG, "updateAcol: $value")
-        // Use reflection to update ilabs.libs.io.data.Var.cool to avoid circular dependency
         try {
-            val varClass = Class.forName("ilabs.libs.io.data.Var")
-            val coolField = varClass.getField("cool")
+            if (coolField == null) {
+                val varClass = Class.forName("ilabs.libs.io.data.Var")
+                coolField = varClass.getField("cool")
+            }
             
-            // Modular logic for palettes: if index > 7, wrap around (17 mod 8)
-            // But we keep shader variants (14, 15, 16) as-is if within that range
             val rawIdx = value.toInt()
             var shaderIdx = rawIdx
             if (shaderIdx > 16) {
                 shaderIdx = shaderIdx % 16 // Shader loop
             }
             
-            coolField.set(null, shaderIdx)
-            Log.d(TAG, "Updated Var.cool to $shaderIdx via reflection (raw=$rawIdx)")
+            coolField?.set(null, shaderIdx)
 
-            // If we are in FLIR mode, also notify the SDK palette with modular loop
-            val palettes = listOf("iron", "rainbow", "grayscale", "arctic", "lava", "contrast", "hotcold", "medical")
-            val paletteIdx = rawIdx % palettes.size
-            val safeIdx = if (paletteIdx < 0) paletteIdx + palettes.size else paletteIdx
-            sdkManager?.setPalette(palettes[safeIdx])
+            // Standard FLIR palette list
+            val paletteNames = getAvailablePalettes()
+            val maxEff = paletteNames.size
+            val paletteIdx = rawIdx % maxEff
+            val safeIdx = if (paletteIdx < 0) paletteIdx + maxEff else paletteIdx
             
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not update Var.cool via reflection: ${e.message}")
+            val targetPaletteName = paletteNames[safeIdx]
+            sdkManager?.setPalette(targetPaletteName)
+            
+        } catch (e: Throwable) {
+            Log.w(TAG, "updateAcol reflection failed: ${e.message}")
         }
     }
+
+    /**
+     * Generate icons for all default palettes and save to cache.
+     */
+    fun generatePaletteIcons(context: Context): List<Map<String, String>> {
+        val results = mutableListOf<Map<String, String>>()
+        val paletteNames = getAvailablePalettes()
+        for (name in paletteNames) {
+            results.add(mapOf(
+                "name" to name,
+                "uri" to "" // No URI - rely on local assets if any
+            ))
+        }
+        return results
+    }
+
+    fun getPalettesWithIcons(context: Context? = null): List<Map<String, String>> {
+        val ctx = context ?: reactContext ?: return emptyList()
+        return generatePaletteIcons(ctx)
+    }
+
     fun destroy() { stop() }
 }

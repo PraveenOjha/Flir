@@ -34,7 +34,7 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     // Simple placeholder conversion: converts an ARGB color to a pseudo-temperature value.
     // Replace with SDK call when integrating thermalsdk APIs.
     @ReactMethod
-    fun getTemperatureFromColor(color: Int, promise: Promise?) {
+    fun getTemperatureFromColor(color: Int, promise: com.facebook.react.bridge.Promise?) {
         try {
             val r = (color shr 16) and 0xFF
             val g = (color shr 8) and 0xFF
@@ -137,6 +137,36 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
         }
     }
     
+    @ReactMethod
+    fun getAvailablePalettes(promise: Promise?) {
+        try {
+            val palettes = FlirManager.getAvailablePalettes()
+            val result = com.facebook.react.bridge.Arguments.createArray()
+            palettes.forEach { result.pushString(it) }
+            promise?.resolve(result)
+        } catch (e: Throwable) {
+            promise?.reject("ERR_FLIR_PALETTES", e)
+        }
+    }
+
+    @ReactMethod
+    fun getPalettesWithIcons(promise: Promise?) {
+        try {
+            val palettes = FlirManager.getPalettesWithIcons(reactContext)
+            val result = com.facebook.react.bridge.Arguments.createArray()
+            
+            palettes.forEach { p ->
+                val map = com.facebook.react.bridge.Arguments.createMap()
+                map.putString("name", p["name"])
+                map.putString("uri", p["uri"])
+                result.pushMap(map)
+            }
+            promise?.resolve(result)
+        } catch (e: Throwable) {
+            promise?.reject("ERR_FLIR_PALETTE_ICONS", e)
+        }
+    }
+
     @ReactMethod
     fun getDiscoveredDevices(promise: Promise?) {
         try {
@@ -258,11 +288,41 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     }
 
     @ReactMethod
+    fun captureRadiometricSnapshot(path: String, promise: Promise?) {
+        try {
+            FlirManager.captureRadiometricSnapshot(path, object : FlirSdkManager.SnapshotCallback {
+                override fun onSnapshotSaved(savedPath: String) {
+                    promise?.resolve(savedPath)
+                }
+                override fun onSnapshotError(message: String) {
+                    promise?.reject("ERR_RADIOMETRIC_SAVE", message)
+                }
+            })
+        } catch (e: Exception) {
+            promise?.reject("ERR_RADIOMETRIC_TRIGGER", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun setSaveRadiometric(enabled: Boolean, promise: Promise?) {
+        try {
+            val varClass = Class.forName("ilabs.libs.io.data.Var")
+            val field = varClass.getField("saveRadiometric")
+            field.set(null, enabled)
+            Log.d(TAG, "Updated Var.saveRadiometric to $enabled via reflection")
+            promise?.resolve(true)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not update Var.saveRadiometric via reflection: ${e.message}")
+            promise?.reject("ERR_FLIR_SAVE_RADIOMETRIC", e)
+        }
+    }
+
+    @ReactMethod
     fun updateAcol(value: Float, promise: Promise?) {
         try {
             FlirManager.updateAcol(value)
             promise?.resolve(true)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             promise?.reject("ERR_FLIR_ACOL", e)
         }
     }
@@ -274,7 +334,7 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
                 FlirManager.setPalette(name)
             }
             promise?.resolve(true)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             promise?.reject("ERR_FLIR_PALETTE", e)
         }
     }
@@ -298,7 +358,7 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     }
     
     @ReactMethod
-    fun getDebugInfo(promise: Promise?) {
+    fun getDebugInfo(promise: com.facebook.react.bridge.Promise?) {
         try {
             val result = com.facebook.react.bridge.Arguments.createMap()
             

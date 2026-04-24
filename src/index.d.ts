@@ -54,6 +54,12 @@ export interface FlirModuleAPI {
     stopFlir(): Promise<boolean>;
     getDiscoveredDevices(): Promise<FlirDevice[]>;
     
+    // Palette & Imaging APIs
+    getAvailablePalettes(): Promise<string[]>;
+    getPalettesWithIcons(): Promise<{ name: string; uri: string }[]>;
+    setPalette(name: string): Promise<boolean>;
+    captureRadiometricSnapshot(path: string): Promise<boolean>;
+
     // Debug APIs
     initializeSDK(): Promise<SDKInitResult>;
     getDebugInfo(): Promise<FlirDebugInfo>;

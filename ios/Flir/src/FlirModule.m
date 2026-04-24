@@ -466,6 +466,30 @@ RCT_EXPORT_METHOD(isBatteryCharging : (RCTPromiseResolveBlock)
   });
 }
 
+RCT_EXPORT_METHOD(getAvailablePalettes : (RCTPromiseResolveBlock)
+                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    id manager = flir_manager_shared();
+    NSArray *palettes = @[];
+    if (manager && [manager respondsToSelector:sel_registerName("getAvailablePalettes")]) {
+      palettes = ((NSArray * (*)(id, SEL)) objc_msgSend)(manager, sel_registerName("getAvailablePalettes"));
+    }
+    if (resolve) resolve(palettes);
+  });
+}
+
+RCT_EXPORT_METHOD(getPalettesWithIcons : (RCTPromiseResolveBlock)
+                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    id manager = flir_manager_shared();
+    NSArray *palettes = @[];
+    if (manager && [manager respondsToSelector:sel_registerName("getPalettesWithIcons")]) {
+      palettes = ((NSArray * (*)(id, SEL)) objc_msgSend)(manager, sel_registerName("getPalettesWithIcons"));
+    }
+    if (resolve) resolve(palettes);
+  });
+}
+
 RCT_EXPORT_METHOD(setPreferSdkRotation : (BOOL)prefer resolver : (
     RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{

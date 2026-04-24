@@ -8,6 +8,7 @@ import android.util.Log;
 import com.flir.thermalsdk.ErrorCode;
 import com.flir.thermalsdk.androidsdk.ThermalSdkAndroid;
 import com.flir.thermalsdk.androidsdk.image.BitmapAndroid;
+import com.flir.thermalsdk.image.ImageBuffer;
 import com.flir.thermalsdk.image.Palette;
 import com.flir.thermalsdk.image.PaletteManager;
 import com.flir.thermalsdk.image.Point;
@@ -22,12 +23,15 @@ import com.flir.thermalsdk.live.connectivity.ConnectionStatusListener;
 import com.flir.thermalsdk.live.discovery.DiscoveredCamera;
 import com.flir.thermalsdk.live.discovery.DiscoveryEventListener;
 import com.flir.thermalsdk.live.discovery.DiscoveryFactory;
+import com.flir.thermalsdk.androidsdk.live.connectivity.SdkWifiConnectionHelper;
 import com.flir.thermalsdk.live.streaming.Stream;
 import com.flir.thermalsdk.live.streaming.ThermalStreamer;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -50,8 +54,9 @@ public class FlirSdkManager {
     private ThermalStreamer streamer;
     private Stream activeStream;
     private final List<Identity> discoveredDevices = Collections.synchronizedList(new ArrayList<>());
+    private final Map<String, DiscoveredCamera> discoveredCameras = Collections.synchronizedMap(new HashMap<>());
     private volatile Bitmap latestBitmap;
-    private volatile String currentPaletteName = "iron";
+    private volatile String currentPaletteName = "WhiteHot";
     private final AtomicBoolean isProcessingFrame = new AtomicBoolean(false);
     private boolean useHalfScale = false;
     private String pendingSnapshotPath = null;
@@ -72,6 +77,13 @@ public class FlirSdkManager {
 
         void onError(String message);
     }
+
+    public interface SnapshotCallback {
+        void onSnapshotSaved(String path);
+        void onSnapshotError(String message);
+    }
+
+    private SnapshotCallback snapshotCallback;
 
     private FlirSdkManager(Context context) {
         this.context = context.getApplicationContext();
@@ -95,10 +107,15 @@ public class FlirSdkManager {
             return;
         try {
             ThermalSdkAndroid.init(context);
+            
+            // Small delay to ensure JNI linkage is stable
+            try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+            
             isInitialized = true;
+            Log.i(TAG, "FLIR SDK initialized successfully. Arch: " + System.getProperty("os.arch"));
             Log.d(TAG, "SDK initialized");
-        } catch (Exception e) {
-            Log.e(TAG, "SDK init failed", e);
+        } catch (Throwable e) {
+            Log.e(TAG, "Critical failure during FLIR SDK initialization", e);
             notifyError("SDK init failed: " + e.getMessage());
         }
     }
@@ -139,25 +156,19 @@ public class FlirSdkManager {
 
     public void stopScan() {
         if (!isScanning) return;
-        
-        // Use a temporary flag to prevent concurrent stop calls
         isScanning = false;
-        
-        executor.execute(() -> {
-            try {
-                Log.d(TAG, "Stopping discovery...");
-                DiscoveryFactory.getInstance().stop(
-                        CommunicationInterface.EMULATOR,
-                        CommunicationInterface.USB,
-                        CommunicationInterface.NETWORK,
-                        CommunicationInterface.FLIR_ONE_WIRELESS);
-                Log.d(TAG, "Discovery stopped successfully");
-            } catch (Exception e) {
-                // This is where the 'Receiver not registered' usually happens in SDK internals.
-                // We catch it silently as it means the SDK already cleaned up or is in a weird state.
-                Log.w(TAG, "Stop scan warning (internal SDK): " + e.getMessage());
-            }
-        });
+        executor.execute(this::stopScanInternal);
+    }
+
+    private void stopScanInternal() {
+        try {
+            Log.d(TAG, "Stopping discovery...");
+            // Use zero-arg stop() as seen in official samples to stop all scanners
+            DiscoveryFactory.getInstance().stop();
+            Log.d(TAG, "Discovery stopped successfully");
+        } catch (Exception e) {
+            Log.w(TAG, "Stop scan warning (internal SDK): " + e.getMessage());
+        }
     }
 
     public List<Identity> getDiscoveredDevices() {
@@ -186,62 +197,86 @@ public class FlirSdkManager {
                     camera = null;
                 }
 
-                Log.d(TAG, "Connecting to: " + identity.deviceId);
-                camera = new Camera();
-
-                // ── Authenticate for NETWORK/WIRELESS cameras (required by FLIR SDK) ──
-                // Matches the official NetworkCamera sample app pattern.
-                // The FLIR One Edge Pro is a network/wireless camera and will reject
-                // connections without prior authentication + trust approval.
-                if (identity.communicationInterface == CommunicationInterface.NETWORK || 
-                    identity.communicationInterface == CommunicationInterface.FLIR_ONE_WIRELESS) {
-                    Log.d(TAG, "Network/Wireless camera detected — authenticating...");
-
-                    // Use a persistent application name (workaround for camera bug
-                    // where re-auth with a different name conflicts). Same pattern
-                    // as CameraAuthName in the NetworkCamera sample.
-                    SharedPreferences prefs = context.getSharedPreferences(
-                            "flir_auth", Context.MODE_PRIVATE);
-                    String authName = prefs.getString("auth_name", null);
-                    if (authName == null) {
-                        authName = context.getPackageName() + "-" +
-                                (System.currentTimeMillis() % 10000);
-                        prefs.edit().putString("auth_name", authName).apply();
-                    }
-
-                    AuthenticationResponse response;
-                    int attempts = 0;
-                    final int MAX_AUTH_ATTEMPTS = 30; // 30 seconds max wait
-                    do {
-                        response = camera.authenticate(identity, authName,
-                                41 * 1000); // 41-second timeout per attempt
-                        Log.d(TAG, "Auth attempt " + (attempts + 1) +
-                                " status: " + response.authenticationStatus);
-
-                        if (response.authenticationStatus ==
-                                AuthenticationResponse.AuthenticationStatus.PENDING) {
-                            // Camera is waiting for user to press "Trust" on its screen
-                            Thread.sleep(1000);
+                // ── FLIR ONE WIRELESS (WiFi) Connection ──
+                // Matches the official FlirOneWireless sample. We must connect to the
+                // camera's WiFi Access Point before calling camera.connect().
+                if (identity.communicationInterface == CommunicationInterface.FLIR_ONE_WIRELESS) {
+                    DiscoveredCamera dc = getDiscoveredCamera(identity.deviceId);
+                    if (dc != null && dc.getCameraDetails() != null) {
+                        String ssid = dc.getCameraDetails().ssid;
+                        Log.d(TAG, "Establishing WiFi connection to: " + ssid);
+                        
+                        if (!SdkWifiConnectionHelper.isConnectedToNetwork(context, ssid)) {
+                            // This is a blocking-style wrapper for simplicity in the executor thread
+                            final AtomicBoolean wifiDone = new AtomicBoolean(false);
+                            final AtomicBoolean wifiSuccess = new AtomicBoolean(false);
+                            
+                            SdkWifiConnectionHelper.connectToWifiWithoutCode(context, dc.getCameraDetails(), status -> {
+                                if (status.status == SdkWifiConnectionHelper.ConInfo.CONNECTED) {
+                                    wifiSuccess.set(true);
+                                    wifiDone.set(true);
+                                } else if (status.status == SdkWifiConnectionHelper.ConInfo.ERROR) {
+                                    wifiSuccess.set(false);
+                                    wifiDone.set(true);
+                                }
+                            });
+                            
+                            // Wait for WiFi connection (max 15 seconds)
+                            int waitLoops = 0;
+                            while (!wifiDone.get() && waitLoops < 30) {
+                                try { Thread.sleep(500); } catch (Exception ignored) {}
+                                waitLoops++;
+                            }
+                            
+                            if (!wifiSuccess.get()) {
+                                notifyError("Failed to connect to camera WiFi: " + ssid);
+                                return;
+                            }
                         }
-                        attempts++;
-                    } while (response.authenticationStatus ==
-                            AuthenticationResponse.AuthenticationStatus.PENDING
-                            && attempts < MAX_AUTH_ATTEMPTS);
-
-                    if (response.authenticationStatus !=
-                            AuthenticationResponse.AuthenticationStatus.APPROVED) {
-                        Log.e(TAG, "Authentication rejected/timed out: " +
-                                response.authenticationStatus);
-                        camera = null;
-                        notifyError("Camera authentication failed. " +
-                                "Check the camera screen for a trust prompt.");
-                        return;
                     }
-                    Log.d(TAG, "Authentication approved");
                 }
 
+                // ── NETWORK Authentication (Required for A/T-series, NOT Wireless) ──
+                if (identity.communicationInterface == CommunicationInterface.NETWORK) {
+                    Log.d(TAG, "Authenticating with network camera: " + identity.deviceId);
+                    
+                    if (isScanning) {
+                        isScanning = false;
+                        stopScanInternal();
+                        try { Thread.sleep(500); } catch (Exception ignored) {}
+                    }
+                    
+                    camera = new Camera();
+                    String authName = "ThermalCameraFx";
+                    AuthenticationResponse response;
+                    int attempts = 0;
+                    final int MAX_AUTH_ATTEMPTS = 3;
+                    
+                    do {
+                        attempts++;
+                        response = camera.authenticate(identity, authName, 41 * 1000);
+                        if (response.authenticationStatus == AuthenticationResponse.AuthenticationStatus.APPROVED) {
+                            break;
+                        }
+                    } while (response.authenticationStatus == AuthenticationResponse.AuthenticationStatus.PENDING && attempts < MAX_AUTH_ATTEMPTS);
+
+                    if (response.authenticationStatus != AuthenticationResponse.AuthenticationStatus.APPROVED) {
+                        notifyError("Authentication failed: " + response.authenticationStatus.name());
+                        return;
+                    }
+                } else {
+                    // For all other types, stop scan if still running
+                    if (isScanning) {
+                        isScanning = false;
+                        stopScanInternal();
+                        try { Thread.sleep(300); } catch (Exception ignored) {}
+                    }
+                    camera = new Camera();
+                }
+
+                Log.d(TAG, "Calling camera.connect() for " + identity.deviceId);
                 camera.connect(identity, connectionStatusListener, new ConnectParameters());
-                Log.d(TAG, "Connected to: " + identity.deviceId);
+                Log.d(TAG, "camera.connect() returned for " + identity.deviceId + ". isConnected=" + camera.isConnected());
 
                 if (listener != null) {
                     listener.onConnected(identity);
@@ -251,7 +286,7 @@ public class FlirSdkManager {
                 startStreamInternal();
 
             } catch (Exception e) {
-                Log.e(TAG, "Connection failed", e);
+                Log.e(TAG, "Connection failed for " + identity.deviceId, e);
                 camera = null;
                 notifyError("Connection failed: " + e.getMessage());
             }
@@ -282,6 +317,10 @@ public class FlirSdkManager {
         return camera != null;
     }
 
+    private DiscoveredCamera getDiscoveredCamera(String deviceId) {
+        return discoveredCameras.get(deviceId);
+    }
+
     // ==================== STREAMING ====================
 
     public void startStream() {
@@ -304,17 +343,49 @@ public class FlirSdkManager {
         }
 
         try {
+            // RETRY MECHANISM: For Network/Wireless cameras, the connection might take 
+            // a few hundred milliseconds to stabilize at the native level even after 
+            // camera.connect() returns. We retry for up to 3 seconds.
+            int retries = 0;
+            final int MAX_RETRIES = 15; // 15 * 200ms = 3 seconds
+            while (!camera.isConnected() && retries < MAX_RETRIES) {
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException ignored) {}
+                retries++;
+                if (retries % 5 == 0) {
+                    Log.d(TAG, "Waiting for camera connection state to stabilize... (attempt " + retries + ")");
+                }
+            }
+
             if (!camera.isConnected()) {
-                Log.e(TAG, "Camera not connected, cannot start stream");
+                Log.e(TAG, "Camera failed to report connected state after " + (retries * 200) + "ms");
                 notifyError("Camera not connected");
                 return;
             }
 
-            List<Stream> streams = camera.getStreams();
+            Log.d(TAG, "Camera connected state confirmed after " + (retries * 200) + "ms");
+
+            // RETRY MECHANISM for getStreams: Sometimes streams are not immediately available
+            List<Stream> streams = null;
+            retries = 0;
+            while (retries < 10) { // 10 * 200ms = 2 seconds
+                streams = camera.getStreams();
+                if (streams != null && !streams.isEmpty()) {
+                    break;
+                }
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException ignored) {}
+                retries++;
+            }
+
             if (streams == null || streams.isEmpty()) {
                 notifyError("No streams available");
                 return;
             }
+
+            Log.d(TAG, "Streams found: " + streams.size() + " (after " + (retries * 200) + "ms)");
 
             // Find thermal stream or use first
             Stream thermalStream = null;
@@ -349,33 +420,77 @@ public class FlirSdkManager {
                                     streamer.withThermalImage(thermalImage -> {
                                         // 1. Apply Palette
                                         if (paletteToApply != null) {
-                                            Palette palette = 
-                                                PaletteManager.getDefaultPalettes().stream()
-                                                    .filter(p -> p.name.equalsIgnoreCase(paletteToApply))
-                                                    .findFirst()
-                                                    .orElse(null);
-                                            if (palette != null) {
-                                                thermalImage.setPalette(palette);
+                                            try {
+                                                List<Palette> sdkPalettes = PaletteManager.getDefaultPalettes();
+                                                
+                                                if (paletteToApply.equalsIgnoreCase("Gray") || paletteToApply.equalsIgnoreCase("grayscale")) {
+                                                    // User wants Gray - map to WhiteHot which is the SDK's standard grayscale
+                                                    for (Palette p : sdkPalettes) {
+                                                        if (p.name.equalsIgnoreCase("WhiteHot") || p.name.equalsIgnoreCase("White hot")) {
+                                                            thermalImage.setPalette(p);
+                                                            break;
+                                                        }
+                                                    }
+                                                } else {
+                                                    Palette palette = null;
+                                                    for (Palette p : sdkPalettes) {
+                                                        if (p.name.equalsIgnoreCase(paletteToApply)) {
+                                                            palette = p;
+                                                            break;
+                                                        }
+                                                    }
+                                                    
+                                                    if (palette != null) {
+                                                        thermalImage.setPalette(palette);
+                                                    } else if (paletteToApply.equalsIgnoreCase("Wheel")) {
+                                                        // Fallback for Wheel if not found - some SDKs use different names
+                                                        for (Palette p : sdkPalettes) {
+                                                            if (p.name.contains("Wheel") || p.name.contains("ColorWheel") || p.name.contains("Rainbow")) {
+                                                                thermalImage.setPalette(p);
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            } catch (Throwable t) {
+                                                Log.e(TAG, "Failed to apply palette: " + paletteToApply, t);
                                             }
                                         }
 
                                         // 2. Save Radiometric Snapshot if requested
                                         if (snapshotPath != null) {
                                             try {
+                                                Log.i(TAG, "[SNAPSHOT] Attempting to save radiometric snapshot: " + snapshotPath);
                                                 thermalImage.saveAs(snapshotPath);
-                                                Log.i(TAG, "Radiometric snapshot saved to: " + snapshotPath);
+                                                Log.i(TAG, "[SNAPSHOT] ✅ Success: Radiometric snapshot saved");
+                                                if (snapshotCallback != null) {
+                                                    snapshotCallback.onSnapshotSaved(snapshotPath);
+                                                }
                                             } catch (java.io.IOException e) {
                                                 Log.e(TAG, "Failed to save radiometric snapshot", e);
+                                                if (snapshotCallback != null) {
+                                                    snapshotCallback.onSnapshotError(e.getMessage());
+                                                }
                                             }
                                         }
 
                                         // 3. Generate Bitmap for display
-                                        Bitmap bitmap = BitmapAndroid.createBitmap(thermalImage.getImage()).getBitMap();
-                                        if (bitmap != null) {
-                                            latestBitmap = bitmap;
-                                            if (listener != null) {
-                                                listener.onFrame(bitmap);
+                                        // We use streamer.getImage() to get the rendered image with palette applied.
+                                        try {
+                                            Bitmap newBitmap = BitmapAndroid.createBitmap(streamer.getImage()).getBitMap();
+                                            if (newBitmap != null) {
+                                                Bitmap oldBitmap = latestBitmap;
+                                                latestBitmap = newBitmap;
+                                                if (listener != null) {
+                                                    listener.onFrame(newBitmap);
+                                                }
+                                                // Recycle old bitmap to prevent memory leak
+                                                if (oldBitmap != null && oldBitmap != newBitmap) {
+                                                    oldBitmap.recycle();
+                                                }
                                             }
+                                        } catch (Exception e) {
+                                            Log.e(TAG, "Bitmap creation failed", e);
                                         }
                                     });
                                 }
@@ -462,8 +577,9 @@ public class FlirSdkManager {
         Log.d(TAG, "Requested palette: " + paletteName);
     }
 
-    public void captureRadiometricSnapshot(String path) {
+    public void captureRadiometricSnapshot(String path, SnapshotCallback callback) {
         this.pendingSnapshotPath = path;
+        this.snapshotCallback = callback;
         Log.d(TAG, "Pending radiometric snapshot: " + path);
     }
 
@@ -472,6 +588,8 @@ public class FlirSdkManager {
         public void onCameraFound(DiscoveredCamera discoveredCamera) {
             Identity identity = discoveredCamera.getIdentity();
             Log.d(TAG, "Device found: " + identity.deviceId);
+
+            discoveredCameras.put(identity.deviceId, discoveredCamera);
 
             synchronized (discoveredDevices) {
                 boolean exists = false;
@@ -495,6 +613,7 @@ public class FlirSdkManager {
         @Override
         public void onCameraLost(Identity identity) {
             Log.d(TAG, "Device lost: " + identity.deviceId);
+            discoveredCameras.remove(identity.deviceId);
             synchronized (discoveredDevices) {
                 discoveredDevices.removeIf(d -> d.deviceId.equals(identity.deviceId));
             }
