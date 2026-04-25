@@ -258,7 +258,7 @@ import ThermalSDK
                 let deviceInfo = FlirDeviceInfo(
                     deviceId: identity.deviceId(),
                     name: identity.deviceId(),
-                    communicationType: self.interfaceName(identity.communicationInterface()),
+                    communicationType: self.interfaceName(Int(identity.communicationInterface().rawValue)),
                     isEmulator: identity.communicationInterface() == .emulator
                 )
                 
@@ -606,6 +606,13 @@ import ThermalSDK
         // Placeholder for interface name mapping
         return "UNKNOWN"
     }
+    @objc public func simulateContextLoss() {
+        _latestImage = nil
+        DispatchQueue.main.async { [weak self] in
+            // Re-emit current state to trigger UI refresh
+            self?.emitStateChange(self?._isStreaming == true ? "streaming" : "connected")
+        }
+    }
 }
 
 #if FLIR_ENABLED
@@ -723,7 +730,8 @@ extension FlirManager: FLIRStreamDelegate {
                 
                 streamer.withThermalImage { thermalImage in
                     // 1. Apply Palette
-                    let sdkPalettes = thermalImage.paletteManager.getDefaultPalettes()
+                    guard let paletteManager = thermalImage.paletteManager,
+                          let sdkPalettes = paletteManager.getDefaultPalettes() else { return }
                     var targetPalette: FLIRPalette? = nil
                     
                     if paletteToApply.lowercased() == "gray" || paletteToApply.lowercased() == "grayscale" {

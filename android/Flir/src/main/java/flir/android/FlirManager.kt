@@ -212,6 +212,12 @@ object FlirManager {
         latestBitmap = null
         Log.i(TAG, "FlirManager stopped")
     }
+
+    @Synchronized
+    fun simulateContextLoss() {
+        latestBitmap = null
+        emitDeviceState(if (isStreaming) "streaming" else "connected")
+    }
     
     // Stub legacy methods
     fun startStream() { /* handled automatically by connect */ }

@@ -4,3 +4,6 @@
 // Note: FlirModule should be imported from the native module
 import { NativeModules } from 'react-native';
 export const FlirModule = NativeModules.FlirModule;
+
+export * from './FlirDebugScreen';
+export * from './hooks/useFlirTemperature';

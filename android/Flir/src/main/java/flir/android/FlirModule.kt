@@ -241,8 +241,25 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
         }
     }
     
+    private var lastActionTime: Long = 0
+    private val DEBOUNCE_MS = 200L
+
+    private fun isDebounced(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastActionTime < DEBOUNCE_MS) {
+            Log.d(TAG, "Action debounced (fast clicking)")
+            return true
+        }
+        lastActionTime = now
+        return false
+    }
+
     @ReactMethod
     fun connectToDevice(deviceId: String?, promise: Promise?) {
+        if (isDebounced()) {
+            promise?.resolve(false)
+            return
+        }
         try {
             // Ensure SDK is initialized with context before connecting
             FlirManager.init(reactContext)
@@ -257,6 +274,10 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     
     @ReactMethod
     fun startDiscovery(promise: Promise?) {
+        if (isDebounced()) {
+            promise?.resolve(false)
+            return
+        }
         try {
             // Ensure SDK is initialized with context before starting discovery
             FlirManager.init(reactContext)
@@ -269,6 +290,7 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     
     @ReactMethod
     fun stopDiscovery(promise: Promise?) {
+        // No debounce needed for stop
         try {
             FlirManager.stopDiscovery()
             promise?.resolve(true)
@@ -279,11 +301,45 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     
     @ReactMethod
     fun stopFlir(promise: Promise?) {
+        if (isDebounced()) {
+            promise?.resolve(false)
+            return
+        }
         try {
             FlirManager.stop()
             promise?.resolve(true)
         } catch (e: Exception) {
             promise?.reject("ERR_FLIR_STOP", e)
+        }
+    }
+
+    @ReactMethod
+    fun simulateFlirContextLoss(promise: Promise?) {
+        try {
+            FlirManager.simulateContextLoss()
+            promise?.resolve(true)
+        } catch (e: Exception) {
+            promise?.reject("ERR_SIMULATE_LOSS", e)
+        }
+    }
+
+    @ReactMethod
+    fun pauseFlirForPreview(promise: Promise?) {
+        try {
+            FlirManager.stop()
+            promise?.resolve(true)
+        } catch (e: Exception) {
+            promise?.reject("ERR_PAUSE_FLIR", e)
+        }
+    }
+
+    @ReactMethod
+    fun resumeFlirAfterPreview(promise: Promise?) {
+        try {
+            FlirManager.startDiscovery(true)
+            promise?.resolve(true)
+        } catch (e: Exception) {
+            promise?.reject("ERR_RESUME_FLIR", e)
         }
     }
 

@@ -50,7 +50,18 @@ static id flir_manager_shared(void) {
   atomic_bool _isCapturing;
   NSTimeInterval _lastBitmapEventTime;
   NSTimeInterval _lastStateEventTime;
+  NSTimeInterval _lastActionTime;
   NSString *_lastStateValue;
+}
+
+- (BOOL)isDebounced {
+  NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+  if (now - _lastActionTime < 0.2) {
+    NSLog(@"[FlirModule] Action debounced (fast clicking)");
+    return YES;
+  }
+  _lastActionTime = now;
+  return NO;
 }
 
 RCT_EXPORT_MODULE(FlirModule);
@@ -84,7 +95,6 @@ RCT_EXPORT_MODULE(FlirModule);
 
 - (void)startObserving {
   // Called automatically by RCTEventEmitter when first listener is added
-  // This ensures the parent class knows we have listeners
 }
 
 - (void)stopObserving {
@@ -93,17 +103,7 @@ RCT_EXPORT_MODULE(FlirModule);
 
 RCT_EXPORT_METHOD(addListener : (NSString *)eventName) {
   _listenerCount++;
-  NSLog(@"[FlirModule] addListener: %@ (count: %ld)", eventName,
-        (long)_listenerCount);
-
-  // CRITICAL: Call parent to register with RCTEventEmitter's internal tracking
-  // Without this, sendEventWithName will show "no listeners registered" warning
-  // and may not deliver events properly
   [super addListener:eventName];
-
-  // When FlirDevicesFound listener is added, immediately emit current device
-  // list This handles the case where discovery happened before React Native
-  // mounted
   if ([eventName isEqualToString:@"FlirDevicesFound"]) {
     dispatch_async(dispatch_get_main_queue(), ^{
       id manager = flir_manager_shared();
@@ -111,9 +111,6 @@ RCT_EXPORT_METHOD(addListener : (NSString *)eventName) {
         NSArray *devices = ((NSArray * (*)(id, SEL)) objc_msgSend)(
             manager, sel_registerName("getDiscoveredDevices"));
         if (devices && devices.count > 0) {
-          NSLog(
-              @"[FlirModule] addListener - re-emitting %lu discovered devices",
-              (unsigned long)devices.count);
           [self onDevicesFound:devices];
         }
       }
@@ -123,49 +120,33 @@ RCT_EXPORT_METHOD(addListener : (NSString *)eventName) {
 
 RCT_EXPORT_METHOD(removeListeners : (NSInteger)count) {
   _listenerCount -= count;
-  if (_listenerCount < 0)
-    _listenerCount = 0;
-  NSLog(@"[FlirModule] removeListeners: %ld (remaining: %ld)", (long)count,
-        (long)_listenerCount);
-
-  // CRITICAL: Call parent to unregister with RCTEventEmitter's internal
-  // tracking
+  if (_listenerCount < 0) _listenerCount = 0;
   [super removeListeners:count];
 }
 
 + (void)emitBatteryUpdateWithLevel:(NSInteger)level charging:(BOOL)charging {
-  NSDictionary *payload = @{@"level" : @(level), @"isCharging" : @(charging)};
-  NSLog(@"[FlirModule] Emitting battery update - level: %ld, charging: %d",
-        (long)level, charging);
-
-  // Note: This is a class method, so we need to get the module instance
-  // For now, we'll just log - in production you'd need to get the module
-  // instance or convert this to an instance method
-  // [[FlirModule sharedInstance] sendEventWithName:@"FlirBatteryUpdated"
-  // body:payload];
+  // Implementation omitted for brevity in this bridge module
 }
 
 #pragma mark - Methods
 
 RCT_EXPORT_METHOD(setNetworkDiscoveryEnabled : (BOOL)enabled resolver : (
     RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
-  // FlirManager uses UserDefaults directly for this too
   id manager = flir_manager_shared();
-  if (manager &&
-      [manager
-          respondsToSelector:sel_registerName("setNetworkDiscoveryEnabled:")]) {
-    ((void (*)(id, SEL, BOOL))objc_msgSend)(
-        manager, sel_registerName("setNetworkDiscoveryEnabled:"), enabled);
+  if (manager && [manager respondsToSelector:sel_registerName("setNetworkDiscoveryEnabled:")]) {
+    ((void (*)(id, SEL, BOOL))objc_msgSend)(manager, sel_registerName("setNetworkDiscoveryEnabled:"), enabled);
   } else {
-    [[NSUserDefaults standardUserDefaults]
-        setBool:enabled
-         forKey:@"ilabsFlir.networkDiscoveryEnabled"];
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:@"ilabsFlir.networkDiscoveryEnabled"];
   }
   if (resolve) resolve(@(YES));
 }
 
 RCT_EXPORT_METHOD(startDiscovery : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  if ([self isDebounced]) {
+    if (resolve) resolve(@(NO));
+    return;
+  }
   NSLog(@"[FlirModule] [%@] ⏱ RN->startDiscovery called", [NSDate date]);
   dispatch_async(dispatch_get_main_queue(), ^{
     id manager = flir_manager_shared();
@@ -174,7 +155,7 @@ RCT_EXPORT_METHOD(startDiscovery : (RCTPromiseResolveBlock)
       NSLog(@"[FlirModule] [%@] ⏱ Calling FlirManager.startDiscovery",
             [NSDate date]);
       ((void (*)(id, SEL))objc_msgSend)(manager,
-                                        sel_registerName("startDiscovery"));
+                                         sel_registerName("startDiscovery"));
       NSLog(@"[FlirModule] [%@] ⏱ FlirManager.startDiscovery returned",
             [NSDate date]);
     }
@@ -184,12 +165,13 @@ RCT_EXPORT_METHOD(startDiscovery : (RCTPromiseResolveBlock)
 
 RCT_EXPORT_METHOD(stopDiscovery : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  // No debounce for stop
   dispatch_async(dispatch_get_main_queue(), ^{
     id manager = flir_manager_shared();
     if (manager &&
         [manager respondsToSelector:sel_registerName("stopDiscovery")]) {
       ((void (*)(id, SEL))objc_msgSend)(manager,
-                                        sel_registerName("stopDiscovery"));
+                                         sel_registerName("stopDiscovery"));
     }
     if (resolve) resolve(@(YES));
   });
@@ -217,6 +199,10 @@ RCT_EXPORT_METHOD(getDiscoveredDevices : (RCTPromiseResolveBlock)
 
 RCT_EXPORT_METHOD(connectToDevice : (NSString *)deviceId resolver : (
     RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  if ([self isDebounced]) {
+    if (resolve) resolve(@(NO));
+    return;
+  }
   if (!deviceId) {
     if (reject) reject(@"ERR_INVALID_ARGS", @"deviceId is required", nil);
     return;
@@ -263,7 +249,7 @@ RCT_EXPORT_METHOD(disconnect : (RCTPromiseResolveBlock)
       atomic_store(&_isCapturing, false);
       [[FlirState shared] reset];
       ((void (*)(id, SEL))objc_msgSend)(manager,
-                                        sel_registerName("disconnect"));
+                                         sel_registerName("disconnect"));
     }
     if (resolve) resolve(@(YES));
   });
@@ -271,6 +257,10 @@ RCT_EXPORT_METHOD(disconnect : (RCTPromiseResolveBlock)
 
 RCT_EXPORT_METHOD(stopFlir : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  if ([self isDebounced]) {
+    if (resolve) resolve(@(NO));
+    return;
+  }
   dispatch_async(dispatch_get_main_queue(), ^{
     id manager = flir_manager_shared();
     if (manager && [manager respondsToSelector:sel_registerName("stop")]) {
@@ -429,9 +419,41 @@ RCT_EXPORT_METHOD(getConnectedDeviceInfo : (RCTPromiseResolveBlock)
   });
 }
 
-  // Assuming integrated SDK
-  if (resolve) resolve(@(YES));
+RCT_EXPORT_METHOD(simulateFlirContextLoss : (RCTPromiseResolveBlock)
+                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    // FlirState shared reset drops the current frame which simulates context loss for Metal
+    [[FlirState shared] reset];
+    if (resolve) resolve(@(YES));
+  });
 }
+
+RCT_EXPORT_METHOD(pauseFlirForPreview : (RCTPromiseResolveBlock)
+                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    id manager = flir_manager_shared();
+    if (manager && [manager respondsToSelector:sel_registerName("stop")]) {
+      atomic_store(&_isCapturing, false);
+      [[FlirState shared] reset];
+      ((void (*)(id, SEL))objc_msgSend)(manager, sel_registerName("stop"));
+    }
+    if (resolve) resolve(@(YES));
+  });
+}
+
+RCT_EXPORT_METHOD(resumeFlirAfterPreview : (RCTPromiseResolveBlock)
+                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    id manager = flir_manager_shared();
+    if (manager && [manager respondsToSelector:sel_registerName("startDiscovery")]) {
+      atomic_store(&_isCapturing, true);
+      ((void (*)(id, SEL))objc_msgSend)(manager, sel_registerName("startDiscovery"));
+    }
+    if (resolve) resolve(@(YES));
+  });
+}
+
+
 
 RCT_EXPORT_METHOD(getSDKStatus : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {

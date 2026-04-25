@@ -345,9 +345,9 @@ public class FlirSdkManager {
         try {
             // RETRY MECHANISM: For Network/Wireless cameras, the connection might take 
             // a few hundred milliseconds to stabilize at the native level even after 
-            // camera.connect() returns. We retry for up to 3 seconds.
+            // camera.connect() returns. We retry for up to 10 seconds.
             int retries = 0;
-            final int MAX_RETRIES = 15; // 15 * 200ms = 3 seconds
+            final int MAX_RETRIES = 50; // 50 * 200ms = 10 seconds
             while (!camera.isConnected() && retries < MAX_RETRIES) {
                 try {
                     Thread.sleep(200);
@@ -359,9 +359,14 @@ public class FlirSdkManager {
             }
 
             if (!camera.isConnected()) {
-                Log.e(TAG, "Camera failed to report connected state after " + (retries * 200) + "ms");
-                notifyError("Camera not connected");
-                return;
+                Log.w(TAG, "Camera still reports disconnected after timeout, but attempting to check streams as fallback...");
+                List<Stream> fallbackStreams = camera.getStreams();
+                if (fallbackStreams == null || fallbackStreams.isEmpty()) {
+                    Log.e(TAG, "No streams available and camera is disconnected. Giving up.");
+                    notifyError("Camera not connected and no streams found");
+                    return;
+                }
+                Log.i(TAG, "Found " + fallbackStreams.size() + " streams despite disconnected status. Proceeding...");
             }
 
             Log.d(TAG, "Camera connected state confirmed after " + (retries * 200) + "ms");
