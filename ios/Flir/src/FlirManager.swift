@@ -757,7 +757,7 @@ extension FlirManager: FLIRStreamDelegate {
                     // 2. Save Radiometric Snapshot if requested
                     if let path = snapshotPath {
                         do {
-                            try thermalImage.save(to: path)
+                            try thermalImage.save(as: path)
                             NSLog("[FlirManager] Radiometric snapshot saved to: \(path)")
                         } catch {
                             NSLog("[FlirManager] Failed to save radiometric snapshot: \(error)")
