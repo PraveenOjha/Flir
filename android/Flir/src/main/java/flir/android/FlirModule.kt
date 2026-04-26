@@ -145,7 +145,9 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             palettes.forEach { result.pushString(it) }
             promise?.resolve(result)
         } catch (e: Throwable) {
-            promise?.reject("ERR_FLIR_PALETTES", e)
+            try {
+                promise?.reject("ERR_FLIR_PALETTES", e)
+            } catch (ignored: Exception) {}
         }
     }
 
@@ -163,7 +165,9 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             }
             promise?.resolve(result)
         } catch (e: Throwable) {
-            promise?.reject("ERR_FLIR_PALETTE_ICONS", e)
+            try {
+                promise?.reject("ERR_FLIR_PALETTE_ICONS", e)
+            } catch (ignored: Exception) {}
         }
     }
 
@@ -345,17 +349,26 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
 
     @ReactMethod
     fun captureRadiometricSnapshot(path: String, promise: Promise?) {
+        val snapshotPromise = promise
+        var settled = java.util.concurrent.atomic.AtomicBoolean(false)
+        
         try {
             FlirManager.captureRadiometricSnapshot(path, object : FlirSdkManager.SnapshotCallback {
                 override fun onSnapshotSaved(savedPath: String) {
-                    promise?.resolve(savedPath)
+                    if (settled.compareAndSet(false, true)) {
+                        snapshotPromise?.resolve(savedPath)
+                    }
                 }
                 override fun onSnapshotError(message: String) {
-                    promise?.reject("ERR_RADIOMETRIC_SAVE", message)
+                    if (settled.compareAndSet(false, true)) {
+                        snapshotPromise?.reject("ERR_RADIOMETRIC_SAVE", message)
+                    }
                 }
             })
         } catch (e: Exception) {
-            promise?.reject("ERR_RADIOMETRIC_TRIGGER", e.message)
+            if (settled.compareAndSet(false, true)) {
+                promise?.reject("ERR_RADIOMETRIC_TRIGGER", e.message)
+            }
         }
     }
 
@@ -409,7 +422,9 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             result.putBoolean("initialized", false)
             result.putString("error", e.message ?: "Unknown error")
             result.putString("errorType", e.javaClass.simpleName)
-            promise?.resolve(result)
+            try {
+                promise?.resolve(result)
+            } catch (ignored: Exception) {}
         }
     }
     

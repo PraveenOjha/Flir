@@ -83,7 +83,7 @@ public class FlirSdkManager {
         void onSnapshotError(String message);
     }
 
-    private SnapshotCallback snapshotCallback;
+    private volatile SnapshotCallback snapshotCallback;
 
     private FlirSdkManager(Context context) {
         this.context = context.getApplicationContext();
@@ -470,11 +470,13 @@ public class FlirSdkManager {
                                                 Log.i(TAG, "[SNAPSHOT] ✅ Success: Radiometric snapshot saved");
                                                 if (snapshotCallback != null) {
                                                     snapshotCallback.onSnapshotSaved(snapshotPath);
+                                                    snapshotCallback = null;
                                                 }
                                             } catch (java.io.IOException e) {
                                                 Log.e(TAG, "Failed to save radiometric snapshot", e);
                                                 if (snapshotCallback != null) {
                                                     snapshotCallback.onSnapshotError(e.getMessage());
+                                                    snapshotCallback = null;
                                                 }
                                             }
                                         }
