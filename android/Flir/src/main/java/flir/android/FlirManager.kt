@@ -44,6 +44,9 @@ object FlirManager {
     private var isStreaming = false
     private var connectedDeviceId: String? = null
     private var connectedDeviceName: String? = null
+    
+    // Manual gating
+    var manualOnly: Boolean = true
 
     // Concurrency control
     private val shouldProcessFrames = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -124,16 +127,32 @@ object FlirManager {
      */
     @Synchronized
     fun startDiscovery(retry: Boolean = false) {
+        if (manualOnly && !retry) {
+            Log.w(TAG, "🔭 [FLIR] Discovery blocked: manualOnly is enabled. Use startManualDiscovery() or disable the gate.")
+            return
+        }
+
         if (!isInitialized && reactContext != null) {
             init(reactContext!!)
         }
         
         if (isScanning && !retry) return
         
-        Log.i(TAG, "Starting FlirManager discovery...")
+        Log.i(TAG, "🔭 [FLIR] Starting discovery (retry=$retry)...")
         isScanning = true
         emitDeviceState("discovering")
         sdkManager?.scan()
+    }
+
+    /**
+     * Explicitly starts discovery regardless of manualOnly flag.
+     * Use this for JS-triggered scans.
+     */
+    @Synchronized
+    fun startManualDiscovery() {
+        Log.i(TAG, "🔭 [FLIR] Manual discovery requested - opening gate.")
+        manualOnly = false
+        startDiscovery(true)
     }
     
     /**

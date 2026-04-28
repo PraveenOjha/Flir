@@ -66,6 +66,9 @@ import ThermalSDK
     // Internal synchronization
     private let stateLock = NSObject()
     
+    // Manual gating
+    @objc public var manualOnly: Bool = true
+    
     // Palette and Snapshot state
     private var currentPaletteName: String = "WhiteHot"
     private var pendingSnapshotPath: String?
@@ -113,7 +116,12 @@ import ThermalSDK
     // MARK: - Discovery
     
     @objc public func startDiscovery() {
-        NSLog("[FlirManager] startDiscovery")
+        if manualOnly {
+            NSLog("[FlirManager] 🔭 Discovery blocked: manualOnly is enabled. Use startManualDiscovery() or disable the gate.")
+            return
+        }
+        
+        NSLog("[FlirManager] 🔭 startDiscovery (manualOnly=false)")
         
 #if FLIR_ENABLED
         discoveredDevices.removeAll()
@@ -131,6 +139,14 @@ import ThermalSDK
 #else
         delegate?.onError("FLIR SDK not available")
 #endif
+    }
+    
+    /// Explicitly starts discovery regardless of manualOnly flag.
+    /// Use this for JS-triggered scans.
+    @objc public func startManualDiscovery() {
+        NSLog("[FlirManager] 🔭 Manual discovery requested - opening gate.")
+        manualOnly = false
+        startDiscovery()
     }
     
     @objc public func stopDiscovery() {

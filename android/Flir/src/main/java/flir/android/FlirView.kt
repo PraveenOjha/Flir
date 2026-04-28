@@ -28,10 +28,8 @@ class FlirView(context: ThemedReactContext) : FrameLayout(context) {
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        // Let the centralized manager handle discovery and streaming and emit events
-        try {
-            FlirManager.startDiscoveryAndConnect(context as ThemedReactContext)
-        } catch (ignored: Throwable) {}
+        // GATING: Automatic discovery on attach is disabled to enforce manual discovery
+        // FlirManager.startDiscoveryAndConnect(context as ThemedReactContext)
     }
 
     override fun onDetachedFromWindow() {

@@ -238,7 +238,7 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
             // Ensure SDK is initialized with context before starting discovery
             FlirManager.init(reactContext)
             // With simplified API, just start discovery - emulators are discovered like any device
-            FlirManager.startDiscovery(true)
+            FlirManager.startManualDiscovery()
             promise?.resolve(true)
         } catch (e: Exception) {
             promise?.reject("ERR_FLIR_EMULATOR", e)
@@ -285,7 +285,7 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
         try {
             // Ensure SDK is initialized with context before starting discovery
             FlirManager.init(reactContext)
-            FlirManager.startDiscovery(true)
+            FlirManager.startManualDiscovery()
             promise?.resolve(true)
         } catch (e: Exception) {
             promise?.reject("ERR_FLIR_DISCOVERY", e)
@@ -340,7 +340,7 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     @ReactMethod
     fun resumeFlirAfterPreview(promise: Promise?) {
         try {
-            FlirManager.startDiscovery(true)
+            FlirManager.startManualDiscovery()
             promise?.resolve(true)
         } catch (e: Exception) {
             promise?.reject("ERR_RESUME_FLIR", e)
@@ -408,6 +408,16 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
         }
     }
     
+    @ReactMethod
+    fun setManualDiscoveryOnly(enabled: Boolean, promise: Promise?) {
+        try {
+            FlirManager.manualOnly = enabled
+            promise?.resolve(true)
+        } catch (e: Exception) {
+            promise?.reject("ERR_FLIR_GATE", e)
+        }
+    }
+
     @ReactMethod
     fun initializeSDK(promise: Promise?) {
         try {

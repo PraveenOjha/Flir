@@ -151,13 +151,15 @@ RCT_EXPORT_METHOD(startDiscovery : (RCTPromiseResolveBlock)
   dispatch_async(dispatch_get_main_queue(), ^{
     id manager = flir_manager_shared();
     if (manager &&
-        [manager respondsToSelector:sel_registerName("startDiscovery")]) {
-      NSLog(@"[FlirModule] [%@] ⏱ Calling FlirManager.startDiscovery",
+        [manager respondsToSelector:sel_registerName("startManualDiscovery")]) {
+      NSLog(@"[FlirModule] [%@] ⏱ Calling FlirManager.startManualDiscovery",
             [NSDate date]);
       ((void (*)(id, SEL))objc_msgSend)(manager,
+                                         sel_registerName("startManualDiscovery"));
+    } else if (manager && [manager respondsToSelector:sel_registerName("startDiscovery")]) {
+      // Fallback for older manager versions
+      ((void (*)(id, SEL))objc_msgSend)(manager,
                                          sel_registerName("startDiscovery"));
-      NSLog(@"[FlirModule] [%@] ⏱ FlirManager.startDiscovery returned",
-            [NSDate date]);
     }
     if (resolve) resolve(@(YES));
   });
@@ -290,6 +292,11 @@ RCT_EXPORT_METHOD(startEmulator : (NSString *)emulatorType resolver : (
       // Initiate emulator start asynchronously
       ((void (*)(id, SEL, id))objc_msgSend)(
           manager, sel_registerName("startEmulatorWithType:"), emulatorType ?: @"FLIR_ONE_EDGE");
+
+      // Opening the gate for emulator discovery too
+      if ([manager respondsToSelector:sel_registerName("setManualOnly:")]) {
+          ((void (*)(id, SEL, BOOL))objc_msgSend)(manager, sel_registerName("setManualOnly:"), NO);
+      }
 
       // Resolve immediately - connection status will come via events
       if (resolve) resolve(@(YES));
@@ -445,7 +452,10 @@ RCT_EXPORT_METHOD(resumeFlirAfterPreview : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
     id manager = flir_manager_shared();
-    if (manager && [manager respondsToSelector:sel_registerName("startDiscovery")]) {
+    if (manager && [manager respondsToSelector:sel_registerName("startManualDiscovery")]) {
+      atomic_store(&_isCapturing, true);
+      ((void (*)(id, SEL))objc_msgSend)(manager, sel_registerName("startManualDiscovery"));
+    } else if (manager && [manager respondsToSelector:sel_registerName("startDiscovery")]) {
       atomic_store(&_isCapturing, true);
       ((void (*)(id, SEL))objc_msgSend)(manager, sel_registerName("startDiscovery"));
     }
@@ -454,6 +464,17 @@ RCT_EXPORT_METHOD(resumeFlirAfterPreview : (RCTPromiseResolveBlock)
 }
 
 
+
+RCT_EXPORT_METHOD(setManualDiscoveryOnly : (BOOL)enabled resolver : (
+    RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    id manager = flir_manager_shared();
+    if (manager && [manager respondsToSelector:sel_registerName("setManualOnly:")]) {
+      ((void (*)(id, SEL, BOOL))objc_msgSend)(manager, sel_registerName("setManualOnly:"), enabled);
+    }
+    if (resolve) resolve(@(YES));
+  });
+}
 
 RCT_EXPORT_METHOD(getSDKStatus : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {
