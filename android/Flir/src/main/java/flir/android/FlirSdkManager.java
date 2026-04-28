@@ -48,7 +48,7 @@ public class FlirSdkManager {
     private final Executor executor = Executors.newSingleThreadExecutor();
 
     // State
-    private boolean isInitialized = false;
+    private final AtomicBoolean isInitialized = new AtomicBoolean(false);
     private boolean isScanning = false;
     private Camera camera;
     private ThermalStreamer streamer;
@@ -103,32 +103,34 @@ public class FlirSdkManager {
     // ==================== INITIALIZE ====================
 
     public void initialize() {
-        if (isInitialized)
-            return;
-        try {
-            ThermalSdkAndroid.init(context);
+        if (isInitialized.compareAndSet(false, true)) {
+            Log.d(TAG, "Initializing FLIR SDK (async)...");
             
-            // Small delay to ensure JNI linkage is stable
-            try { Thread.sleep(100); } catch (InterruptedException ignored) {}
-            
-            isInitialized = true;
-            Log.i(TAG, "FLIR SDK initialized successfully. Arch: " + System.getProperty("os.arch"));
-            Log.d(TAG, "SDK initialized");
-        } catch (Throwable e) {
-            Log.e(TAG, "Critical failure during FLIR SDK initialization", e);
-            notifyError("SDK init failed: " + e.getMessage());
+            executor.execute(() -> {
+                try {
+                    ThermalSdkAndroid.init(context);
+                    
+                    // Small delay to ensure JNI linkage is stable
+                    try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+                    
+                    Log.d(TAG, "FLIR SDK initialized successfully on background thread. Arch: " + System.getProperty("os.arch"));
+                } catch (Throwable t) {
+                    Log.e(TAG, "Failed to initialize FLIR SDK", t);
+                    isInitialized.set(false);
+                }
+            });
         }
     }
 
     public boolean isInitialized() {
-        return isInitialized;
+        return isInitialized.get();
     }
 
     // ==================== DISCOVERY ====================
 
     public void scan() {
         executor.execute(() -> {
-            if (!isInitialized) {
+            if (!isInitialized.get()) {
                 notifyError("SDK not initialized");
                 return;
             }

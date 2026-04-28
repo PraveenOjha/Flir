@@ -340,7 +340,8 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     @ReactMethod
     fun resumeFlirAfterPreview(promise: Promise?) {
         try {
-            FlirManager.startManualDiscovery()
+            // Respect the gate - do not open it blindly on resume
+            FlirManager.startDiscovery()
             promise?.resolve(true)
         } catch (e: Exception) {
             promise?.reject("ERR_RESUME_FLIR", e)
