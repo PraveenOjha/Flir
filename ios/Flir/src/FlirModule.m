@@ -332,7 +332,8 @@ RCT_EXPORT_METHOD(getTemperatureAt : (nonnull NSNumber *)x y : (
 }
 
 RCT_EXPORT_METHOD(getTemperatureAtNormalized : (nonnull NSNumber *)nx y : (
-    nonnull NSNumber *)ny resolver : (RCTPromiseResolveBlock)
+    nonnull NSNumber *)ny rotation : (nonnull NSNumber *)rotation
+    resolver : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
     id manager = flir_manager_shared();
@@ -340,11 +341,11 @@ RCT_EXPORT_METHOD(getTemperatureAtNormalized : (nonnull NSNumber *)nx y : (
     if (manager &&
         [manager
             respondsToSelector:sel_registerName(
-                "getTemperatureAtNormalized:y:")]) {
-      temp = ((double (*)(id, SEL, double, double))objc_msgSend)(
+                "getTemperatureAtNormalized:y:rotation:")]) {
+      temp = ((double (*)(id, SEL, double, double, NSInteger))objc_msgSend)(
           manager,
-          sel_registerName("getTemperatureAtNormalized:y:"),
-          [nx doubleValue], [ny doubleValue]);
+          sel_registerName("getTemperatureAtNormalized:y:rotation:"),
+          [nx doubleValue], [ny doubleValue], [rotation integerValue]);
     }
     if (isnan(temp)) {
       if (resolve) resolve([NSNull null]);

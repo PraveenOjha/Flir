@@ -250,10 +250,24 @@ object FlirManager {
         return if (temp != null && !temp.isNaN()) temp else null
     }
     
-    fun getTemperatureAtNormalized(nx: Double, ny: Double): Double? {
+    fun getTemperatureAtNormalized(nx: Double, ny: Double, rotation: Int = -90): Double? {
         val bitmap = latestBitmap ?: return null
-        val px = (nx * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
-        val py = (ny * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
+        
+        // Map UI normalized (0..1) to Raw sensor normalized (0..1) based on display rotation
+        // Using generic trigonometric rotation formula for total precision
+        val angle = -rotation.toDouble() // Inverse the display rotation
+        val rad = Math.toRadians(angle)
+        val cosA = Math.cos(rad)
+        val sinA = Math.sin(rad)
+        
+        // Rotate around center (0.5, 0.5)
+        val dx = nx - 0.5
+        val dy = ny - 0.5
+        val rawX = dx * cosA - dy * sinA + 0.5
+        val rawY = dx * sinA + dy * cosA + 0.5
+        
+        val px = (rawX * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
+        val py = (rawY * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
         return getTemperatureAt(px, py)
     }
     

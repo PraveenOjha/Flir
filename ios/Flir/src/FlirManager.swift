@@ -468,7 +468,7 @@ import ThermalSDK
 #endif
     }
     
-    @objc public func getTemperatureAtNormalized(_ nx: Double, y: Double) -> Double {
+    @objc public func getTemperatureAtNormalized(_ nx: Double, y: Double, rotation: Int) -> Double {
 #if FLIR_ENABLED
         guard let streamer = streamer, _isStreaming else { return Double.nan }
         
@@ -477,9 +477,22 @@ import ThermalSDK
             let w = Double(thermalImage.getWidth())
             let h = Double(thermalImage.getHeight())
             
+            // Map UI normalized (0..1) to Raw sensor normalized (0..1) based on display rotation
+            // Using generic trigonometric rotation formula for total precision
+            let angle = -Double(rotation) // Inverse the display rotation
+            let rad = angle * .pi / 180.0
+            let cosA = cos(rad)
+            let sinA = sin(rad)
+            
+            // Rotate around center (0.5, 0.5)
+            let dx = nx - 0.5
+            let dy = y - 0.5
+            let rawX = dx * cosA - dy * sinA + 0.5
+            let rawY = dx * sinA + dy * cosA + 0.5
+            
             // Map normalized (0.0 - 1.0) to actual sensor pixels
-            let cx = max(0, min(Int(w) - 1, Int(nx * w)))
-            let cy_fixed = max(0, min(Int(h) - 1, Int(y * h)))
+            let cx = max(0, min(Int(w) - 1, Int(rawX * w)))
+            let cy_fixed = max(0, min(Int(h) - 1, Int(rawY * h)))
             
             if let measurements = thermalImage.measurements,
                let spot = try? measurements.addSpot(CGPoint(x: cx, y: cy_fixed)) {

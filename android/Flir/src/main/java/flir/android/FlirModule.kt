@@ -69,9 +69,9 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     }
 
     @ReactMethod
-    fun getTemperatureAtNormalized(nx: Double, ny: Double, promise: Promise?) {
+    fun getTemperatureAtNormalized(nx: Double, ny: Double, rotation: Int, promise: Promise?) {
         try {
-            val temp = FlirManager.getTemperatureAtNormalized(nx, ny)
+            val temp = FlirManager.getTemperatureAtNormalized(nx, ny, rotation)
             if (temp != null) promise?.resolve(temp) else promise?.resolve(null)
         } catch (e: Exception) {
             promise?.reject("ERR_FLIR_TEMP_NORM", e)
