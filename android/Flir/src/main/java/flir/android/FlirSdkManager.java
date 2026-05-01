@@ -579,6 +579,37 @@ public class FlirSdkManager {
         return result[0];
     }
 
+    /**
+     * Samples temperature using normalized coordinates (0.0 to 1.0)
+     * This avoids clamping bugs when UI dimensions differ from sensor dimensions.
+     */
+    public double getTemperatureAtNormalized(double nx, double ny) {
+        final double[] result = { Double.NaN };
+        synchronized (this) {
+            if (streamer == null) return Double.NaN;
+            try {
+                streamer.withThermalImage(thermalImage -> {
+                    try {
+                        int w = thermalImage.getWidth();
+                        int h = thermalImage.getHeight();
+                        // Map normalized 0..1 to sensor pixels 0..w-1
+                        int cx = (int) Math.max(0, Math.min(w - 1, nx * w));
+                        int cy = (int) Math.max(0, Math.min(h - 1, ny * h));
+                        ThermalValue value = thermalImage.getValueAt(new Point(cx, cy));
+                        if (value != null) {
+                            result[0] = value.asCelsius().value;
+                        }
+                    } catch (Exception e) {
+                        Log.w(TAG, "Normalized temp query error", e);
+                    }
+                });
+            } catch (Exception e) {
+                Log.w(TAG, "Normalized temp query failed", e);
+            }
+        }
+        return result[0];
+    }
+
     // ==================== LISTENERS ====================
     
     public void setPalette(String paletteName) {

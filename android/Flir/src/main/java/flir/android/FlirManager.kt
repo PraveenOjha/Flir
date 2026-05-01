@@ -266,9 +266,7 @@ object FlirManager {
         val rawX = dx * cosA - dy * sinA + 0.5
         val rawY = dx * sinA + dy * cosA + 0.5
         
-        val px = (rawX * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
-        val py = (rawY * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
-        return getTemperatureAt(px, py)
+        return FlirSdkManager.getInstance(reactContext).getTemperatureAtNormalized(rawX, rawY)
     }
     
     fun getTemperatureAtPoint(x: Int, y: Int): Double? = getTemperatureAt(x, y)
