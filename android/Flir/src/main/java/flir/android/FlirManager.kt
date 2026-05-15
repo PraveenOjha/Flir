@@ -86,16 +86,6 @@ object FlirManager {
     
     fun setPalette(name: String) {
         sdkManager?.setPalette(name)
-        // Also try to update the app's global Var.cool if possible
-        try {
-            val palettes = getAvailablePalettes()
-            val idx = palettes.indexOfFirst { it.equals(name, ignoreCase = true) }
-            if (idx != -1) {
-                updateAcol(idx.toFloat())
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "setPalette: Failed to update Var.cool", e)
-        }
     }
     
     fun getAvailablePalettes(): List<String> {
@@ -463,15 +453,6 @@ object FlirManager {
             }
             
             coolField?.set(null, shaderIdx)
-
-            // Standard FLIR palette list
-            val paletteNames = getAvailablePalettes()
-            val maxEff = paletteNames.size
-            val paletteIdx = rawIdx % maxEff
-            val safeIdx = if (paletteIdx < 0) paletteIdx + maxEff else paletteIdx
-            
-            val targetPaletteName = paletteNames[safeIdx]
-            sdkManager?.setPalette(targetPaletteName)
             
         } catch (e: Throwable) {
             Log.w(TAG, "updateAcol reflection failed: ${e.message}")

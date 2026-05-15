@@ -134,12 +134,17 @@ public class FlirSdkManager {
                 notifyError("SDK not initialized");
                 return;
             }
-            if (isScanning)
-                return;
+            if (isScanning) {
+                Log.d(TAG, "Discovery already running, ensuring clean state...");
+                try {
+                    DiscoveryFactory.getInstance().stop();
+                } catch (Throwable ignored) {}
+                isScanning = false;
+            }
 
             isScanning = true;
             discoveredDevices.clear();
-            Log.d(TAG, "Starting discovery...");
+            Log.d(TAG, "Starting discovery for all interfaces...");
 
             try {
                 DiscoveryFactory.getInstance().scan(
@@ -157,19 +162,23 @@ public class FlirSdkManager {
     }
 
     public void stopScan() {
-        if (!isScanning) return;
-        isScanning = false;
-        executor.execute(this::stopScanInternal);
+        executor.execute(() -> {
+            if (!isScanning) return;
+            isScanning = false;
+            stopScanInternal();
+        });
     }
 
     private void stopScanInternal() {
         try {
-            Log.d(TAG, "Stopping discovery...");
+            Log.d(TAG, "Stopping all discovery scanners...");
             // Use zero-arg stop() as seen in official samples to stop all scanners
             DiscoveryFactory.getInstance().stop();
             Log.d(TAG, "Discovery stopped successfully");
-        } catch (Exception e) {
-            Log.w(TAG, "Stop scan warning (internal SDK): " + e.getMessage());
+        } catch (Throwable t) {
+            // This catches the notorious 'Receiver not registered' IllegalArgumentException
+            // and any other JNI-bubbled exceptions during teardown.
+            Log.w(TAG, "Stop scan suppressed (SDK internal race): " + t.getMessage());
         }
     }
 
@@ -297,6 +306,10 @@ public class FlirSdkManager {
 
     public void disconnect() {
         executor.execute(() -> {
+            if (isScanning) {
+                isScanning = false;
+                stopScanInternal();
+            }
             stopStreamInternal();
 
             if (camera != null) {

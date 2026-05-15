@@ -1,4 +1,6 @@
 # Build artifacts
+bin/
+android/Flir/bin/
 *.gradle
 .settings
 build/

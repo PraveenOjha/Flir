@@ -34,7 +34,7 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     // Simple placeholder conversion: converts an ARGB color to a pseudo-temperature value.
     // Replace with SDK call when integrating thermalsdk APIs.
     @ReactMethod
-    fun getTemperatureFromColor(color: Int, promise: com.facebook.react.bridge.Promise?) {
+    fun getTemperatureFromColor(color: Int, promise: Promise?) {
         try {
             val r = (color shr 16) and 0xFF
             val g = (color shr 8) and 0xFF
@@ -305,17 +305,18 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     
     @ReactMethod
     fun stopFlir(promise: Promise?) {
-        if (isDebounced()) {
-            promise?.resolve(false)
-            return
-        }
-        try {
-            FlirManager.stop()
-            promise?.resolve(true)
-        } catch (e: Exception) {
-            promise?.reject("ERR_FLIR_STOP", e)
-        }
+    if (isDebounced()) {
+        promise?.resolve(false)
+        return
     }
+    try {
+        FlirManager.stop()
+        promise?.resolve(true)
+     } catch (e: Exception) {
+        promise?.reject("ERR_FLIR_STOP", e)
+    }
+   }
+ 
 
     @ReactMethod
     fun simulateFlirContextLoss(promise: Promise?) {
@@ -440,7 +441,7 @@ class FlirModule(private val reactContext: ReactApplicationContext) : ReactConte
     }
     
     @ReactMethod
-    fun getDebugInfo(promise: com.facebook.react.bridge.Promise?) {
+    fun getDebugInfo(promise: Promise?) {
         try {
             val result = com.facebook.react.bridge.Arguments.createMap()
             
