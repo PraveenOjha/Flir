@@ -203,54 +203,39 @@ import ThermalSDK
             let camType = identity.cameraType()
             NSLog("[FlirManager] Camera type: \(camType.rawValue), interface: \(iface.rawValue)")
             
-            // ── AUTHENTICATE for network cameras ──
-            // Official FLIR CameraConnector sample checks .generic camera type,
-            // but FLIR One Edge Pro over network may report a different type.
-            // Check BOTH: camera type == .generic OR interface contains .network/.flirOneWireless
-            let needsAuth = (camType == .generic) || iface.contains(.network) || iface.contains(.flirOneWireless)
+            let isNetwork = (camType == .generic) || iface.contains(.network)
             
-            if needsAuth {
-                NSLog("[FlirManager] Network camera detected — authenticating...")
-                
-                // Use UUID-based persistent certificate name (matches FLIR sample).
-                // The camera has a bug where re-auth with a different name can conflict,
-                // so we generate a UUID once and persist it in UserDefaults.
-                let certName = self.getPersistentCertificateName()
-                NSLog("[FlirManager] Using certificate name: \(certName)")
+            // ── STEP 1: INITIAL TRUST HANDSHAKE (Network Cameras Only) ──
+            // DiscoverySampleSwift shows that for network cameras we first authenticate
+            // with a user-friendly device/app name to trigger the "Trust this device" prompt.
+            if isNetwork {
+                NSLog("[FlirManager] Network camera detected — initiating initial trust request...")
+                let appName = Bundle.main.infoDictionary?[kCFBundleNameKey as String] as? String ?? "AppFactory"
+                let trustName = "\(UIDevice.current.name) \(appName)"
                 
                 var status = FLIRAuthenticationStatus.pending
                 var attempts = 0
-                let maxAttempts = 30 // ~30 seconds timeout
+                let maxAttempts = 15 // 15 seconds window for initial prompt
                 
                 while status == .pending && attempts < maxAttempts {
-                    status = cam.authenticate(identity, trustedConnectionName: certName)
-                    NSLog("[FlirManager] Auth attempt \(attempts + 1)/\(maxAttempts) status: \(status.rawValue)")
-                    
+                    status = cam.authenticate(identity, trustedConnectionName: trustName)
+                    NSLog("[FlirManager] Initial trust attempt \(attempts + 1)/\(maxAttempts) status: \(status.rawValue)")
                     if status == .pending {
-                        // Camera waiting for user to press "Trust" on its screen
                         Thread.sleep(forTimeInterval: 1.0)
                     }
                     attempts += 1
                 }
-                
-                if status != .approved {
-                    NSLog("[FlirManager] Authentication failed/timed out: \(status.rawValue)")
-                    self.camera = nil
-                    DispatchQueue.main.async {
-                        self.emitStateChange("connection_failed")
-                        self.delegate?.onError("Camera authentication failed. Check the camera screen for a trust/approve prompt.")
-                    }
-                    return
-                }
-                NSLog("[FlirManager] Authentication approved ✅")
             }
             
-            // ── PAIR ──
+            // ── STEP 2: PAIRING (Always do this before final authentication!) ──
+            // Both FLIROneCameraSwift and DiscoverySampleSwift require pairing to be established
+            // before the camera's communication channels are authenticated and connected.
             do {
+                NSLog("[FlirManager] Pairing camera with code 0...")
                 try cam.pair(identity, code: 0)
-                NSLog("[FlirManager] Pair succeeded")
+                NSLog("[FlirManager] Pairing succeeded ✅")
             } catch {
-                NSLog("[FlirManager] Pair failed: \(error)")
+                NSLog("[FlirManager] Pairing failed: \(error)")
                 self._isConnected = false
                 self.camera = nil
                 DispatchQueue.main.async {
@@ -259,6 +244,37 @@ import ThermalSDK
                 }
                 return
             }
+            
+            // ── STEP 3: FINAL AUTHENTICATION ──
+            // Use a persistent UUID certificate for network/wireless cameras to avoid trust conflicts.
+            // For standard classic FLIR ONE/Edge devices, use "dummy" as per FLIROneCameraSwift ViewController.swift.
+            let certName = isNetwork ? self.getPersistentCertificateName() : "dummy"
+            NSLog("[FlirManager] Performing final authentication with name: \(certName)")
+            
+            var status = FLIRAuthenticationStatus.pending
+            var attempts = 0
+            let maxAttempts = 30 // ~30 seconds timeout
+            
+            while status == .pending && attempts < maxAttempts {
+                status = cam.authenticate(identity, trustedConnectionName: certName)
+                NSLog("[FlirManager] Final auth attempt \(attempts + 1)/\(maxAttempts) status: \(status.rawValue)")
+                
+                if status == .pending {
+                    Thread.sleep(forTimeInterval: 1.0)
+                }
+                attempts += 1
+            }
+            
+            if status != .approved && isNetwork {
+                NSLog("[FlirManager] Final authentication failed or timed out: \(status.rawValue)")
+                self.camera = nil
+                DispatchQueue.main.async {
+                    self.emitStateChange("connection_failed")
+                    self.delegate?.onError("Camera authentication failed. Check the camera screen for a trust/approve prompt.")
+                }
+                return
+            }
+            NSLog("[FlirManager] Authentication approved ✅")
             
             // ── CONNECT ──
             do {

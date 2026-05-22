@@ -387,6 +387,8 @@ object FlirManager {
             }
             ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 .emit("FlirDeviceConnected", params)
+            ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit("FlirStateChanged", params)
         } catch (e: Exception) { }
     }
     

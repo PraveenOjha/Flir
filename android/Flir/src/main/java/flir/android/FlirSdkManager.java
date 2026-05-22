@@ -86,7 +86,37 @@ public class FlirSdkManager {
     private volatile SnapshotCallback snapshotCallback;
 
     private FlirSdkManager(Context context) {
-        this.context = context.getApplicationContext();
+        // We wrap the Application context to intercept and swallow IllegalArgumentException
+        // during unregisterReceiver. The FLIR SDK has a bug in WifiScanner where it attempts
+        // to unregister a receiver that wasn't registered, which bubbles up to JNI and crashes
+        // the app via std::terminate.
+        this.context = new android.content.ContextWrapper(context.getApplicationContext()) {
+            @Override
+            public Context getApplicationContext() {
+                return this;
+            }
+
+            @Override
+            public android.content.Intent registerReceiver(android.content.BroadcastReceiver receiver, android.content.IntentFilter filter) {
+                try {
+                    return super.registerReceiver(receiver, filter);
+                } catch (Exception e) {
+                    Log.w(TAG, "Suppressed registerReceiver error: " + e.getMessage());
+                    return null;
+                }
+            }
+
+            @Override
+            public void unregisterReceiver(android.content.BroadcastReceiver receiver) {
+                try {
+                    super.unregisterReceiver(receiver);
+                } catch (IllegalArgumentException e) {
+                    Log.w(TAG, "Suppressed SDK crash: Receiver not registered: " + e.getMessage());
+                } catch (Exception e) {
+                    Log.w(TAG, "Suppressed unregisterReceiver error: " + e.getMessage());
+                }
+            }
+        };
     }
 
     public static synchronized FlirSdkManager getInstance(Context context) {
@@ -106,8 +136,51 @@ public class FlirSdkManager {
         if (isInitialized.compareAndSet(false, true)) {
             Log.d(TAG, "Initializing FLIR SDK (async)...");
             
+            // Register a main thread looper protector to completely safeguard against WifiScanner supplicant receiver crashes
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(new Runnable() {
+                @Override
+                public void run() {
+                    while (true) {
+                        try {
+                            android.os.Looper.loop();
+                        } catch (Throwable t) {
+                            String msg = t.getMessage();
+                            boolean isSuppressed = false;
+                            
+                            // Check if this is the notorious FLIR supplicant receiver crash
+                            if (t instanceof RuntimeException && t.getCause() instanceof IllegalArgumentException) {
+                                String causeMsg = t.getCause().getMessage();
+                                if (causeMsg != null && (causeMsg.contains("Receiver not registered") || causeMsg.contains("WifiScanner"))) {
+                                    isSuppressed = true;
+                                }
+                            } else if (msg != null && (msg.contains("Receiver not registered") || msg.contains("WifiScanner") || msg.contains("supplicant.STATE_CHANGE"))) {
+                                isSuppressed = true;
+                            }
+                            
+                            if (isSuppressed) {
+                                Log.w(TAG, "🔒 [FLIR LOOPER PROTECTOR] Intercepted and swallowed broadcast receiver crash: " + t.getMessage());
+                            } else {
+                                // For all other unexpected exceptions, forward to the standard uncaught exception handler
+                                Thread.UncaughtExceptionHandler handler = Thread.getDefaultUncaughtExceptionHandler();
+                                if (handler != null) {
+                                    handler.uncaughtException(Thread.currentThread(), t);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+
             executor.execute(() -> {
                 try {
+                    try {
+                        System.loadLibrary("c++_flir");
+                        Log.d(TAG, "Successfully loaded legacy libc++_flir.so for FLIR SDK.");
+                    } catch (UnsatisfiedLinkError e) {
+                        Log.e(TAG, "Could not explicitly load libc++_flir.so. FLIR initialization might fail.", e);
+                    }
+                    
                     ThermalSdkAndroid.init(context);
                     
                     // Small delay to ensure JNI linkage is stable
