@@ -89,6 +89,7 @@ import ThermalSDK
     private var stream: FLIRStream?
     private var streamer: FLIRThermalStreamer?
     private var identityMap: [String: FLIRIdentity] = [:]
+    private var cachedSdkPalettes: [FLIRPalette]? = nil
 #endif
     
     private override init() {
@@ -753,77 +754,91 @@ extension FlirManager: FLIRStreamDelegate {
         _isProcessingFrame = true
         renderQueue.async { [weak self] in
             defer { self?._isProcessingFrame = false }
-            guard let self = self, self._isStreaming, let streamer = self.streamer else {
-                return
-            }
-            
-            objc_sync_enter(self.stateLock)
-            let currentStreamer = self.streamer
-            let streaming = self._isStreaming
-            objc_sync_exit(self.stateLock)
-            
-            guard streaming, let streamer = currentStreamer else {
-                return
-            }
-
-            let paletteToApply = self.currentPaletteName
-            let snapshotPath = self.pendingSnapshotPath
-            self.pendingSnapshotPath = nil
-
-            do {
-                try streamer.update()
-                
-                streamer.withThermalImage { thermalImage in
-                    // 1. Apply Palette
-                    guard let paletteManager = thermalImage.paletteManager,
-                          let sdkPalettes = paletteManager.getDefaultPalettes() else { return }
-                    var targetPalette: FLIRPalette? = nil
-                    
-                    if paletteToApply.lowercased() == "gray" || paletteToApply.lowercased() == "grayscale" {
-                        // Map Gray to WhiteHot (standard SDK name)
-                        targetPalette = sdkPalettes.first(where: { 
-                            $0.name.lowercased() == "whitehot" || $0.name.lowercased() == "white hot" 
-                        })
-                    } else {
-                        targetPalette = sdkPalettes.first(where: { $0.name.lowercased() == paletteToApply.lowercased() })
-                        
-                        // Fallback for Wheel
-                        if targetPalette == nil && paletteToApply.lowercased() == "wheel" {
-                            targetPalette = sdkPalettes.first(where: {
-                                $0.name.contains("Wheel") || $0.name.contains("ColorWheel") || $0.name.contains("Rainbow")
-                            })
-                        }
-                    }
-                    
-                    if let palette = targetPalette {
-                        thermalImage.palette = palette
-                    }
-
-                    // 2. Save Radiometric Snapshot if requested
-                    if let path = snapshotPath {
-                        do {
-                            try thermalImage.save(as: path)
-                            NSLog("[FlirManager] Radiometric snapshot saved to: \(path)")
-                        } catch {
-                            NSLog("[FlirManager] Failed to save radiometric snapshot: \(error)")
-                        }
-                    }
-
-                    // 3. Generate UIImage for display
-                    // Grab the image while the thermal image is locked to ensure settings are applied
-                    if let image = streamer.getImage() {
-                        self._latestImage = image
-                        let width = Int(image.size.width)
-                        let height = Int(image.size.height)
-                        
-                        DispatchQueue.main.async { [weak self] in
-                            self?.delegate?.onFrameReceived(image, width: width, height: height)
-                        }
-                    }
+            autoreleasepool {
+                guard let self = self, self._isStreaming, let streamer = self.streamer else {
+                    return
                 }
-            } catch {
-                NSLog("[FlirManager] Streamer update failed: \(error)")
-                return
+                
+                objc_sync_enter(self.stateLock)
+                let currentStreamer = self.streamer
+                let streaming = self._isStreaming
+                objc_sync_exit(self.stateLock)
+                
+                guard streaming, let streamer = currentStreamer else {
+                    return
+                }
+
+                let paletteToApply = self.currentPaletteName
+                let snapshotPath = self.pendingSnapshotPath
+                self.pendingSnapshotPath = nil
+
+                do {
+                    try streamer.update()
+                    
+                    streamer.withThermalImage { thermalImage in
+                        // 1. Apply Palette
+                        guard let paletteManager = thermalImage.paletteManager else { return }
+                        
+                        var sdkPalettes = self.cachedSdkPalettes
+                        if sdkPalettes == nil {
+                            objc_sync_enter(self.stateLock)
+                            sdkPalettes = self.cachedSdkPalettes
+                            if sdkPalettes == nil {
+                                sdkPalettes = paletteManager.getDefaultPalettes() as? [FLIRPalette]
+                                self.cachedSdkPalettes = sdkPalettes
+                            }
+                            objc_sync_exit(self.stateLock)
+                        }
+                        
+                        guard let palettes = sdkPalettes else { return }
+                        var targetPalette: FLIRPalette? = nil
+                        
+                        if paletteToApply.lowercased() == "gray" || paletteToApply.lowercased() == "grayscale" {
+                            // Map Gray to WhiteHot (standard SDK name)
+                            targetPalette = palettes.first(where: { 
+                                $0.name.lowercased() == "whitehot" || $0.name.lowercased() == "white hot" 
+                            })
+                        } else {
+                            targetPalette = palettes.first(where: { $0.name.lowercased() == paletteToApply.lowercased() })
+                            
+                            // Fallback for Wheel
+                            if targetPalette == nil && paletteToApply.lowercased() == "wheel" {
+                                targetPalette = palettes.first(where: {
+                                    $0.name.contains("Wheel") || $0.name.contains("ColorWheel") || $0.name.contains("Rainbow")
+                                })
+                            }
+                        }
+                        
+                        if let palette = targetPalette {
+                            thermalImage.palette = palette
+                        }
+
+                        // 2. Save Radiometric Snapshot if requested
+                        if let path = snapshotPath {
+                            do {
+                                try thermalImage.save(as: path)
+                                NSLog("[FlirManager] Radiometric snapshot saved to: \(path)")
+                            } catch {
+                                NSLog("[FlirManager] Failed to save radiometric snapshot: \(error)")
+                            }
+                        }
+
+                        // 3. Generate UIImage for display
+                        // Grab the image while the thermal image is locked to ensure settings are applied
+                        if let image = streamer.getImage() {
+                            self._latestImage = image
+                            let width = Int(image.size.width)
+                            let height = Int(image.size.height)
+                            
+                            DispatchQueue.main.async { [weak self] in
+                                self?.delegate?.onFrameReceived(image, width: width, height: height)
+                            }
+                        }
+                    }
+                } catch {
+                    NSLog("[FlirManager] Streamer update failed: \(error)")
+                    return
+                }
             }
         }
     }

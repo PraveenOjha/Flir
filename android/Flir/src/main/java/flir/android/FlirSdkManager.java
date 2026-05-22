@@ -60,6 +60,7 @@ public class FlirSdkManager {
     private final AtomicBoolean isProcessingFrame = new AtomicBoolean(false);
     private boolean useHalfScale = false;
     private String pendingSnapshotPath = null;
+    private volatile List<Palette> cachedSdkPalettes = null;
 
     // Listener
     private Listener listener;
@@ -509,12 +510,24 @@ public class FlirSdkManager {
                                     final String paletteToApply = currentPaletteName;
                                     final String snapshotPath = pendingSnapshotPath;
                                     pendingSnapshotPath = null;
-
                                     streamer.withThermalImage(thermalImage -> {
                                         // 1. Apply Palette
                                         if (paletteToApply != null) {
                                             try {
-                                                List<Palette> sdkPalettes = PaletteManager.getDefaultPalettes();
+                                                 List<Palette> sdkPalettes = cachedSdkPalettes;
+                                                 if (sdkPalettes == null) {
+                                                     synchronized (FlirSdkManager.this) {
+                                                         sdkPalettes = cachedSdkPalettes;
+                                                         if (sdkPalettes == null) {
+                                                             try {
+                                                                 sdkPalettes = PaletteManager.getDefaultPalettes();
+                                                                 cachedSdkPalettes = sdkPalettes;
+                                                             } catch (Throwable t) {
+                                                                 Log.e(TAG, "Failed to get default palettes", t);
+                                                             }
+                                                         }
+                                                     }
+                                                 }
                                                 
                                                 if (paletteToApply.equalsIgnoreCase("Gray") || paletteToApply.equalsIgnoreCase("grayscale")) {
                                                     // User wants Gray - map to WhiteHot which is the SDK's standard grayscale
