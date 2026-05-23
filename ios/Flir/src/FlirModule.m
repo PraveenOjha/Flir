@@ -643,23 +643,24 @@ RCT_EXPORT_METHOD(isPreferSdkRotation : (RCTPromiseResolveBlock)
 - (void)onFrameReceived:(UIImage *)image
                   width:(NSInteger)width
                  height:(NSInteger)height {
+  @autoreleasepool {
+    NSLog(@"[FLIR-TRACE 6️⃣] onFrameReceived in FlirModule - _isCapturing=%d image=%@", 
+          atomic_load(&_isCapturing), image);
 
-  NSLog(@"[FLIR-TRACE 6️⃣] onFrameReceived in FlirModule - _isCapturing=%d image=%@", 
-        atomic_load(&_isCapturing), image);
+    if (!atomic_load(&_isCapturing)) {
+      NSLog(@"[FLIR-TRACE ❌] _isCapturing is false - frame DROPPED");
+      return;
+    }
 
-  if (!atomic_load(&_isCapturing)) {
-    NSLog(@"[FLIR-TRACE ❌] _isCapturing is false - frame DROPPED");
-    return;
+    NSLog(@"[FLIR-TRACE 7️⃣] Calling FlirState.updateFrame with image %ldx%ld", 
+          (long)width, (long)height);
+    
+    // CRITICAL: Update shared state so native preview (FlirPreviewView) receives
+    // the texture
+    [[FlirState shared] updateFrame:image];
+
+    NSLog(@"[FLIR-TRACE 8️⃣] FlirState.updateFrame completed");
   }
-
-  NSLog(@"[FLIR-TRACE 7️⃣] Calling FlirState.updateFrame with image %ldx%ld", 
-        (long)width, (long)height);
-  
-  // CRITICAL: Update shared state so native preview (FlirPreviewView) receives
-  // the texture
-  [[FlirState shared] updateFrame:image];
-
-  NSLog(@"[FLIR-TRACE 8️⃣] FlirState.updateFrame completed");
 }
 
 - (void)onFrameReceivedRaw:(NSData *)data

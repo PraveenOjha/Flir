@@ -90,12 +90,14 @@ static FlirState *_sharedState = nil;
 - (void)updateFrame:(UIImage *)image
     withTemperatureData:(NSArray<NSNumber *> *)tempData {
   dispatch_async(_accessQueue, ^{
-    self.latestImage = image;
+    @autoreleasepool {
+      self.latestImage = image;
 
-    if (tempData != nil) {
-      self->_temperatureData = [tempData copy];
-      self->_imageWidth = (int)image.size.width;
-      self->_imageHeight = (int)image.size.height;
+      if (tempData != nil) {
+        self->_temperatureData = [tempData copy];
+        self->_imageWidth = (int)image.size.width;
+        self->_imageHeight = (int)image.size.height;
+      }
     }
   });
 
@@ -110,18 +112,20 @@ static FlirState *_sharedState = nil;
       NSLog(@"[FLIR-TRACE 🔟] Dispatching onTextureUpdate callback to main "
             @"queue");
       dispatch_async(dispatch_get_main_queue(), ^{
-        @try {
-          if (self.onTextureUpdate) {
-            NSLog(@"[FLIR-TRACE 1️⃣1️⃣] Invoking onTextureUpdate callback with "
-                  @"image %@",
-                  image);
-            self.onTextureUpdate(image, 7);
-            NSLog(@"[FLIR-TRACE 1️⃣2️⃣] onTextureUpdate callback completed");
-          } else {
-            NSLog(@"[FLIR-TRACE ❌] onTextureUpdate became nil before invoke");
+        @autoreleasepool {
+          @try {
+            if (self.onTextureUpdate) {
+              NSLog(@"[FLIR-TRACE 1️⃣1️⃣] Invoking onTextureUpdate callback with "
+                    @"image %@",
+                    image);
+              self.onTextureUpdate(image, 7);
+              NSLog(@"[FLIR-TRACE 1️⃣2️⃣] onTextureUpdate callback completed");
+            } else {
+              NSLog(@"[FLIR-TRACE ❌] onTextureUpdate became nil before invoke");
+            }
+          } @finally {
+            atomic_store(&_isTextureBusy, false);
           }
-        } @finally {
-          atomic_store(&_isTextureBusy, false);
         }
       });
     } else {
@@ -140,8 +144,10 @@ static FlirState *_sharedState = nil;
     double temp = [self getTemperatureAt:centerX y:centerY];
 
     dispatch_async(dispatch_get_main_queue(), ^{
-      if (self.onTemperatureUpdate) {
-        self.onTemperatureUpdate(temp, centerX, centerY);
+      @autoreleasepool {
+        if (self.onTemperatureUpdate) {
+          self.onTemperatureUpdate(temp, centerX, centerY);
+        }
       }
     });
   }
