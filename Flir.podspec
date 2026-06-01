@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name         = 'Flir'
-  s.version      = '2.4.10'
+  s.version      = '2.4.11'
   s.summary      = 'FLIR Thermal SDK React Native - Bundled via postinstall'
   s.description  = <<-DESC
     A React Native wrapper for the FLIR Thermal SDK, providing thermal imaging

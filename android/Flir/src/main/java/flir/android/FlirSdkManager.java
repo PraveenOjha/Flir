@@ -504,103 +504,105 @@ public class FlirSdkManager {
                         // to ensure the native frame reference remains valid.
                         if (isProcessingFrame.compareAndSet(false, true)) {
                             try {
-                                if (streamer != null && activeStream != null) {
-                                    streamer.update();
-                                    
-                                    final String paletteToApply = currentPaletteName;
-                                    final String snapshotPath = pendingSnapshotPath;
-                                    pendingSnapshotPath = null;
-                                    streamer.withThermalImage(thermalImage -> {
-                                        // 1. Apply Palette
-                                        if (paletteToApply != null) {
-                                            try {
-                                                 List<Palette> sdkPalettes = cachedSdkPalettes;
-                                                 if (sdkPalettes == null) {
-                                                     synchronized (FlirSdkManager.this) {
-                                                         sdkPalettes = cachedSdkPalettes;
-                                                         if (sdkPalettes == null) {
-                                                             try {
-                                                                 sdkPalettes = PaletteManager.getDefaultPalettes();
-                                                                 cachedSdkPalettes = sdkPalettes;
-                                                             } catch (Throwable t) {
-                                                                 Log.e(TAG, "Failed to get default palettes", t);
+                                synchronized (FlirSdkManager.this) {
+                                    if (streamer != null && activeStream != null) {
+                                        streamer.update();
+                                        
+                                        final String paletteToApply = currentPaletteName;
+                                        final String snapshotPath = pendingSnapshotPath;
+                                        pendingSnapshotPath = null;
+                                        streamer.withThermalImage(thermalImage -> {
+                                            // 1. Apply Palette
+                                            if (paletteToApply != null) {
+                                                try {
+                                                     List<Palette> sdkPalettes = cachedSdkPalettes;
+                                                     if (sdkPalettes == null) {
+                                                         synchronized (FlirSdkManager.this) {
+                                                             sdkPalettes = cachedSdkPalettes;
+                                                             if (sdkPalettes == null) {
+                                                                 try {
+                                                                     sdkPalettes = PaletteManager.getDefaultPalettes();
+                                                                     cachedSdkPalettes = sdkPalettes;
+                                                                 } catch (Throwable t) {
+                                                                     Log.e(TAG, "Failed to get default palettes", t);
+                                                                 }
                                                              }
                                                          }
                                                      }
-                                                 }
-                                                
-                                                if (paletteToApply.equalsIgnoreCase("Gray") || paletteToApply.equalsIgnoreCase("grayscale")) {
-                                                    // User wants Gray - map to WhiteHot which is the SDK's standard grayscale
-                                                    for (Palette p : sdkPalettes) {
-                                                        if (p.name.equalsIgnoreCase("WhiteHot") || p.name.equalsIgnoreCase("White hot")) {
-                                                            thermalImage.setPalette(p);
-                                                            break;
-                                                        }
-                                                    }
-                                                } else {
-                                                    Palette palette = null;
-                                                    for (Palette p : sdkPalettes) {
-                                                        if (p.name.equalsIgnoreCase(paletteToApply)) {
-                                                            palette = p;
-                                                            break;
-                                                        }
-                                                    }
                                                     
-                                                    if (palette != null) {
-                                                        thermalImage.setPalette(palette);
-                                                    } else if (paletteToApply.equalsIgnoreCase("Wheel")) {
-                                                        // Fallback for Wheel if not found - some SDKs use different names
+                                                    if (paletteToApply.equalsIgnoreCase("Gray") || paletteToApply.equalsIgnoreCase("grayscale")) {
+                                                        // User wants Gray - map to WhiteHot which is the SDK's standard grayscale
                                                         for (Palette p : sdkPalettes) {
-                                                            if (p.name.contains("Wheel") || p.name.contains("ColorWheel") || p.name.contains("Rainbow")) {
+                                                            if (p.name.equalsIgnoreCase("WhiteHot") || p.name.equalsIgnoreCase("White hot")) {
                                                                 thermalImage.setPalette(p);
                                                                 break;
                                                             }
                                                         }
+                                                    } else {
+                                                        Palette palette = null;
+                                                        for (Palette p : sdkPalettes) {
+                                                            if (p.name.equalsIgnoreCase(paletteToApply)) {
+                                                                palette = p;
+                                                                break;
+                                                            }
+                                                        }
+                                                        
+                                                        if (palette != null) {
+                                                            thermalImage.setPalette(palette);
+                                                        } else if (paletteToApply.equalsIgnoreCase("Wheel")) {
+                                                            // Fallback for Wheel if not found - some SDKs use different names
+                                                            for (Palette p : sdkPalettes) {
+                                                                if (p.name.contains("Wheel") || p.name.contains("ColorWheel") || p.name.contains("Rainbow")) {
+                                                                    thermalImage.setPalette(p);
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                } catch (Throwable t) {
+                                                    Log.e(TAG, "Failed to apply palette: " + paletteToApply, t);
+                                                }
+                                            }
+
+                                            // 2. Save Radiometric Snapshot if requested
+                                            if (snapshotPath != null) {
+                                                try {
+                                                    Log.i(TAG, "[SNAPSHOT] Attempting to save radiometric snapshot: " + snapshotPath);
+                                                    thermalImage.saveAs(snapshotPath);
+                                                    Log.i(TAG, "[SNAPSHOT] ✅ Success: Radiometric snapshot saved");
+                                                    if (snapshotCallback != null) {
+                                                        snapshotCallback.onSnapshotSaved(snapshotPath);
+                                                        snapshotCallback = null;
+                                                    }
+                                                } catch (java.io.IOException e) {
+                                                    Log.e(TAG, "Failed to save radiometric snapshot", e);
+                                                    if (snapshotCallback != null) {
+                                                        snapshotCallback.onSnapshotError(e.getMessage());
+                                                        snapshotCallback = null;
                                                     }
                                                 }
-                                            } catch (Throwable t) {
-                                                Log.e(TAG, "Failed to apply palette: " + paletteToApply, t);
                                             }
-                                        }
 
-                                        // 2. Save Radiometric Snapshot if requested
-                                        if (snapshotPath != null) {
+                                            // 3. Generate Bitmap for display
+                                            // We use streamer.getImage() to get the rendered image with palette applied.
                                             try {
-                                                Log.i(TAG, "[SNAPSHOT] Attempting to save radiometric snapshot: " + snapshotPath);
-                                                thermalImage.saveAs(snapshotPath);
-                                                Log.i(TAG, "[SNAPSHOT] ✅ Success: Radiometric snapshot saved");
-                                                if (snapshotCallback != null) {
-                                                    snapshotCallback.onSnapshotSaved(snapshotPath);
-                                                    snapshotCallback = null;
+                                                Bitmap newBitmap = BitmapAndroid.createBitmap(streamer.getImage()).getBitMap();
+                                                if (newBitmap != null) {
+                                                    Bitmap oldBitmap = latestBitmap;
+                                                    latestBitmap = newBitmap;
+                                                    if (listener != null) {
+                                                        listener.onFrame(newBitmap);
+                                                    }
+                                                    // Recycle old bitmap to prevent memory leak
+                                                    if (oldBitmap != null && oldBitmap != newBitmap) {
+                                                        oldBitmap.recycle();
+                                                    }
                                                 }
-                                            } catch (java.io.IOException e) {
-                                                Log.e(TAG, "Failed to save radiometric snapshot", e);
-                                                if (snapshotCallback != null) {
-                                                    snapshotCallback.onSnapshotError(e.getMessage());
-                                                    snapshotCallback = null;
-                                                }
+                                            } catch (Exception e) {
+                                                Log.e(TAG, "Bitmap creation failed", e);
                                             }
-                                        }
-
-                                        // 3. Generate Bitmap for display
-                                        // We use streamer.getImage() to get the rendered image with palette applied.
-                                        try {
-                                            Bitmap newBitmap = BitmapAndroid.createBitmap(streamer.getImage()).getBitMap();
-                                            if (newBitmap != null) {
-                                                Bitmap oldBitmap = latestBitmap;
-                                                latestBitmap = newBitmap;
-                                                if (listener != null) {
-                                                    listener.onFrame(newBitmap);
-                                                }
-                                                // Recycle old bitmap to prevent memory leak
-                                                if (oldBitmap != null && oldBitmap != newBitmap) {
-                                                    oldBitmap.recycle();
-                                                }
-                                            }
-                                        } catch (Exception e) {
-                                            Log.e(TAG, "Bitmap creation failed", e);
-                                        }
-                                    });
+                                        });
+                                    }
                                 }
                             } catch (Exception e) {
                                 Log.e(TAG, "Frame processing error", e);
@@ -629,16 +631,18 @@ public class FlirSdkManager {
     }
 
     private void stopStreamInternal() {
-        if (activeStream != null) {
-            try {
-                activeStream.stop();
-            } catch (Exception e) {
-                Log.e(TAG, "Stop stream error", e);
+        synchronized (this) {
+            if (activeStream != null) {
+                try {
+                    activeStream.stop();
+                } catch (Exception e) {
+                    Log.e(TAG, "Stop stream error", e);
+                }
+                activeStream = null;
             }
-            activeStream = null;
+            streamer = null;
+            latestBitmap = null;
         }
-        streamer = null;
-        latestBitmap = null;
         Log.d(TAG, "Streaming stopped");
     }
 
