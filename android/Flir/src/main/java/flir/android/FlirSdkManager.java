@@ -145,6 +145,14 @@ public class FlirSdkManager {
                         try {
                             android.os.Looper.loop();
                         } catch (Throwable t) {
+                            if (t instanceof VirtualMachineError) {
+                                Log.e(TAG, "🚨 [FLIR LOOPER PROTECTOR] VirtualMachineError/OOM detected! Releasing display bitmap and running GC...");
+                                try {
+                                    latestBitmap = null;
+                                    System.gc();
+                                } catch (Throwable ignored) {}
+                                continue;
+                            }
                             String msg = t.getMessage();
                             boolean isSuppressed = false;
                             
@@ -641,7 +649,10 @@ public class FlirSdkManager {
                 activeStream = null;
             }
             streamer = null;
-            latestBitmap = null;
+            if (latestBitmap != null) {
+                latestBitmap.recycle();
+                latestBitmap = null;
+            }
         }
         Log.d(TAG, "Streaming stopped");
     }
