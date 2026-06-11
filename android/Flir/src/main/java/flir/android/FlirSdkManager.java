@@ -56,6 +56,10 @@ public class FlirSdkManager {
     private final List<Identity> discoveredDevices = Collections.synchronizedList(new ArrayList<>());
     private final Map<String, DiscoveredCamera> discoveredCameras = Collections.synchronizedMap(new HashMap<>());
     private volatile Bitmap latestBitmap;
+    private final Bitmap[] bitmapRingBuffer = new Bitmap[3];
+    private int ringBufferIndex = 0;
+    private volatile boolean isFrameConsumerActive = false;
+    private int[] scalePixelBuffer = null;
     private volatile String currentPaletteName = "WhiteHot";
     private final AtomicBoolean isProcessingFrame = new AtomicBoolean(false);
     private boolean useHalfScale = false;
@@ -118,6 +122,22 @@ public class FlirSdkManager {
                 }
             }
         };
+
+        // Auto-detect low-end device to enable useHalfScale
+        try {
+            android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+            android.app.ActivityManager activityManager = (android.app.ActivityManager) this.context.getSystemService(Context.ACTIVITY_SERVICE);
+            if (activityManager != null) {
+                activityManager.getMemoryInfo(mi);
+                boolean isLowRam = activityManager.isLowRamDevice();
+                if (isLowRam || mi.totalMem < 3L * 1024 * 1024 * 1024) {
+                    useHalfScale = true;
+                    Log.i(TAG, "Low-end device detected (Total RAM: " + (mi.totalMem / (1024 * 1024)) + "MB). Enabling half-scale rendering by default.");
+                }
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to auto-detect memory constraints", t);
+        }
     }
 
     public static synchronized FlirSdkManager getInstance(Context context) {
@@ -148,7 +168,18 @@ public class FlirSdkManager {
                             if (t instanceof VirtualMachineError) {
                                 Log.e(TAG, "🚨 [FLIR LOOPER PROTECTOR] VirtualMachineError/OOM detected! Releasing display bitmap and running GC...");
                                 try {
-                                    latestBitmap = null;
+                                    if (instance != null) {
+                                        synchronized (instance) {
+                                            for (int i = 0; i < 3; i++) {
+                                                if (instance.bitmapRingBuffer[i] != null) {
+                                                    instance.bitmapRingBuffer[i].recycle();
+                                                    instance.bitmapRingBuffer[i] = null;
+                                                }
+                                            }
+                                            instance.latestBitmap = null;
+                                            instance.scalePixelBuffer = null;
+                                        }
+                                    }
                                     System.gc();
                                 } catch (Throwable ignored) {}
                                 continue;
@@ -433,6 +464,11 @@ public class FlirSdkManager {
         });
     }
 
+    public void setFrameConsumerActive(boolean active) {
+        this.isFrameConsumerActive = active;
+        Log.d(TAG, "isFrameConsumerActive set to: " + active);
+    }
+
     private void startStreamInternal() {
         if (camera == null) {
             notifyError("Not connected");
@@ -515,11 +551,13 @@ public class FlirSdkManager {
                                 synchronized (FlirSdkManager.this) {
                                     if (streamer != null && activeStream != null) {
                                         streamer.update();
-                                        
                                         final String paletteToApply = currentPaletteName;
                                         final String snapshotPath = pendingSnapshotPath;
                                         pendingSnapshotPath = null;
                                         streamer.withThermalImage(thermalImage -> {
+                                            if (!isFrameConsumerActive && snapshotPath == null) {
+                                                return;
+                                            }
                                             // 1. Apply Palette
                                             if (paletteToApply != null) {
                                                 try {
@@ -592,22 +630,79 @@ public class FlirSdkManager {
                                             }
 
                                             // 3. Generate Bitmap for display
-                                            // We use streamer.getImage() to get the rendered image with palette applied.
-                                            try {
-                                                Bitmap newBitmap = BitmapAndroid.createBitmap(streamer.getImage()).getBitMap();
-                                                if (newBitmap != null) {
-                                                    Bitmap oldBitmap = latestBitmap;
-                                                    latestBitmap = newBitmap;
-                                                    if (listener != null) {
-                                                        listener.onFrame(newBitmap);
+                                            if (isFrameConsumerActive) {
+                                                try {
+                                                    ImageBuffer imageBuffer = streamer.getImage();
+                                                    if (imageBuffer != null) {
+                                                        int width = imageBuffer.getWidth();
+                                                        int height = imageBuffer.getHeight();
+                                                        if (width > 0 && height > 0) {
+                                                            synchronized (FlirSdkManager.this) {
+                                                                int dstW = useHalfScale ? (width / 2) : width;
+                                                                int dstH = useHalfScale ? (height / 2) : height;
+                                                                
+                                                                for (int i = 0; i < 3; i++) {
+                                                                    if (bitmapRingBuffer[i] == null || 
+                                                                        bitmapRingBuffer[i].getWidth() != dstW || 
+                                                                        bitmapRingBuffer[i].getHeight() != dstH) {
+                                                                        
+                                                                        if (bitmapRingBuffer[i] != null) {
+                                                                            bitmapRingBuffer[i].recycle();
+                                                                        }
+                                                                        bitmapRingBuffer[i] = Bitmap.createBitmap(dstW, dstH, Bitmap.Config.ARGB_8888);
+                                                                    }
+                                                                }
+                                                                ringBufferIndex = (ringBufferIndex + 1) % 3;
+                                                                Bitmap targetBitmap = bitmapRingBuffer[ringBufferIndex];
+                                                                
+                                                                if (useHalfScale) {
+                                                                    imageBuffer.with(new com.flir.thermalsdk.utils.Consumer<java.nio.ByteBuffer>() {
+                                                                        @Override
+                                                                        public void accept(java.nio.ByteBuffer byteBuffer) {
+                                                                            if (byteBuffer != null) {
+                                                                                byteBuffer.rewind();
+                                                                                java.nio.IntBuffer srcPixels = byteBuffer.asIntBuffer();
+                                                                                
+                                                                                int totalPixels = dstW * dstH;
+                                                                                if (scalePixelBuffer == null || scalePixelBuffer.length != totalPixels) {
+                                                                                    scalePixelBuffer = new int[totalPixels];
+                                                                                }
+                                                                                
+                                                                                for (int y = 0; y < dstH; y++) {
+                                                                                    int srcY = y * 2;
+                                                                                    int srcRowOffset = srcY * width;
+                                                                                    int dstRowOffset = y * dstW;
+                                                                                    for (int x = 0; x < dstW; x++) {
+                                                                                        int srcX = x * 2;
+                                                                                        scalePixelBuffer[dstRowOffset + x] = srcPixels.get(srcRowOffset + srcX);
+                                                                                    }
+                                                                                }
+                                                                                targetBitmap.setPixels(scalePixelBuffer, 0, dstW, 0, 0, dstW, dstH);
+                                                                            }
+                                                                        }
+                                                                    });
+                                                                } else {
+                                                                    imageBuffer.with(new com.flir.thermalsdk.utils.Consumer<java.nio.ByteBuffer>() {
+                                                                        @Override
+                                                                        public void accept(java.nio.ByteBuffer byteBuffer) {
+                                                                            if (byteBuffer != null) {
+                                                                                byteBuffer.rewind();
+                                                                                targetBitmap.copyPixelsFromBuffer(byteBuffer);
+                                                                            }
+                                                                        }
+                                                                    });
+                                                                }
+                                                                
+                                                                latestBitmap = targetBitmap;
+                                                                if (listener != null) {
+                                                                    listener.onFrame(targetBitmap);
+                                                                }
+                                                            }
+                                                        }
                                                     }
-                                                    // Recycle old bitmap to prevent memory leak
-                                                    if (oldBitmap != null && oldBitmap != newBitmap) {
-                                                        oldBitmap.recycle();
-                                                    }
+                                                } catch (Exception e) {
+                                                    Log.e(TAG, "Bitmap buffer copy failed", e);
                                                 }
-                                            } catch (Exception e) {
-                                                Log.e(TAG, "Bitmap creation failed", e);
                                             }
                                         });
                                     }
@@ -649,10 +744,14 @@ public class FlirSdkManager {
                 activeStream = null;
             }
             streamer = null;
-            if (latestBitmap != null) {
-                latestBitmap.recycle();
-                latestBitmap = null;
+            for (int i = 0; i < 3; i++) {
+                if (bitmapRingBuffer[i] != null) {
+                    bitmapRingBuffer[i].recycle();
+                    bitmapRingBuffer[i] = null;
+                }
             }
+            latestBitmap = null;
+            scalePixelBuffer = null;
         }
         Log.d(TAG, "Streaming stopped");
     }

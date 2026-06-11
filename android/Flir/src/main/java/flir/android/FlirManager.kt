@@ -64,6 +64,7 @@ object FlirManager {
     
     fun setTextureCallback(callback: TextureUpdateCallback?) {
         textureCallback = callback
+        sdkManager?.setFrameConsumerActive(callback != null)
     }
 
     interface TemperatureUpdateCallback {
@@ -107,6 +108,7 @@ object FlirManager {
         sdkManager = FlirSdkManager.getInstance(context)
         sdkManager?.setListener(sdkListener)
         sdkManager?.initialize()
+        sdkManager?.setFrameConsumerActive(textureCallback != null)
         
         isInitialized = true
         Log.i(TAG, "FlirManager initialized")
